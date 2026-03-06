@@ -513,11 +513,57 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
       </header>
 
       {mode === "concierge" ? (
-        /* ── Concierge Chat Mode ── */
-        <>
-          {/* Static sub-bar with Start Over button */}
-          <div className="bg-white border-b border-neutral-100 sticky top-12 z-10">
-            <div className="max-w-2xl mx-auto px-6 py-2">
+        chatMessages.length === 0 ? (
+          /* ── Concierge Landing State ── */
+          <div className="max-w-2xl mx-auto px-6 w-full py-14 flex flex-col items-center text-center">
+            <p className="text-[22px] font-semibold text-neutral-800 tracking-tight mb-2">Your Restaurant Concierge</p>
+            <p className="text-[13px] text-neutral-400 leading-relaxed mb-7">
+              Tell me the occasion — I'll ask a couple of questions<br className="hidden sm:block" />
+              and point you somewhere worth going.
+            </p>
+            <div className="flex flex-wrap gap-2 justify-center mb-5">
+              {[
+                ["First date", "Looking for a first date spot"],
+                ["Birthday dinner", "Planning a birthday dinner"],
+                ["After-work drinks", "Need a spot for after-work drinks"],
+                ["Business lunch", "Looking for a business lunch spot"],
+                ["Romantic night out", "Planning a romantic night out"],
+                ["Group outing", "Organizing a group outing"],
+              ].map(([label, msg]) => (
+                <button
+                  key={label}
+                  onClick={() => handleConciergeChat(msg)}
+                  className="px-4 py-2 rounded-full text-[12px] border border-neutral-200 text-neutral-500 hover:border-neutral-400 hover:text-neutral-800 transition-all bg-white"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {/* Input sits directly below pills */}
+            <div className="w-full flex gap-2 items-center mt-1">
+              <input
+                type="text"
+                value={chatInput}
+                onChange={e => setChatInput(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && !e.shiftKey && handleConciergeChat()}
+                placeholder="Tell me what you're planning…"
+                className="flex-1 px-4 py-2.5 text-[13px] bg-neutral-100 rounded-full border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-300 transition-all"
+              />
+              <button
+                onClick={() => handleConciergeChat()}
+                disabled={!chatInput.trim() || chatLoading}
+                className="shrink-0 px-4 py-2.5 rounded-full text-[13px] font-medium bg-neutral-900 text-white hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150"
+              >
+                Send
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* ── Concierge Active Chat State ── */
+          <div className="max-w-2xl mx-auto px-6 flex flex-col w-full" style={{ height: "calc(100vh - 3rem)" }}>
+
+            {/* Start Over — lives inside the flex column so it's always visible, never scrolls */}
+            <div className="pt-3 pb-1 shrink-0">
               <button
                 onClick={() => { setChatMessages([]); setChatInput(""); }}
                 className="flex items-center gap-1 text-[11px] text-neutral-400 hover:text-neutral-700 transition-colors"
@@ -528,53 +574,20 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
                 Start over
               </button>
             </div>
-          </div>
 
-          <div className="max-w-2xl mx-auto px-6 flex flex-col w-full" style={{ height: "calc(100vh - 3rem - 37px)" }}>
-
-            {/* Messages / Landing */}
-            <div className="flex-1 overflow-y-auto py-6 space-y-4">
-              {chatMessages.length === 0 ? (
-                /* Landing state */
-                <div className="text-center py-20">
-                  <p className="text-[15px] font-medium text-neutral-700 mb-2">Your Hudson Yards concierge</p>
-                  <p className="text-[13px] text-neutral-400 leading-relaxed">
-                    Tell me the occasion and I'll find you the right spot.<br className="hidden sm:block" />
-                    I'll ask a couple questions before making a call.
-                  </p>
-                  <div className="mt-6 flex flex-wrap gap-2 justify-center">
-                    {[
-                      ["First date", "Looking for a first date spot"],
-                      ["Birthday dinner", "Planning a birthday dinner"],
-                      ["After-work drinks", "Need a spot for after-work drinks"],
-                      ["Business lunch", "Looking for a business lunch spot"],
-                      ["Romantic night out", "Planning a romantic night out"],
-                      ["Group outing", "Organizing a group outing"],
-                    ].map(([label, msg]) => (
-                      <button
-                        key={label}
-                        onClick={() => handleConciergeChat(msg)}
-                        className="px-4 py-2 rounded-full text-[12px] border border-neutral-200 text-neutral-500 hover:border-neutral-400 hover:text-neutral-800 transition-all bg-white"
-                      >
-                        {label}
-                      </button>
-                    ))}
+            {/* Messages — scrollable */}
+            <div className="flex-1 overflow-y-auto pb-4 space-y-4">
+              {chatMessages.map((msg, i) => (
+                <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                  <div className={`max-w-[82%] px-4 py-2.5 rounded-2xl text-[13px] leading-relaxed whitespace-pre-wrap
+                    ${msg.role === "user"
+                      ? "bg-neutral-900 text-white rounded-br-sm"
+                      : "bg-white border border-neutral-100 text-neutral-800 rounded-bl-sm shadow-sm"
+                    }`}>
+                    {msg.content}
                   </div>
                 </div>
-              ) : (
-                /* Chat thread */
-                chatMessages.map((msg, i) => (
-                  <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                    <div className={`max-w-[82%] px-4 py-2.5 rounded-2xl text-[13px] leading-relaxed whitespace-pre-wrap
-                      ${msg.role === "user"
-                        ? "bg-neutral-900 text-white rounded-br-sm"
-                        : "bg-white border border-neutral-100 text-neutral-800 rounded-bl-sm shadow-sm"
-                      }`}>
-                      {msg.content}
-                    </div>
-                  </div>
-                ))
-              )}
+              ))}
 
               {/* Typing indicator */}
               {chatLoading && (
@@ -591,7 +604,7 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
               <div ref={chatEndRef} />
             </div>
 
-            {/* Chat input — fixed at bottom of concierge view */}
+            {/* Input — pinned at bottom */}
             <div className="py-4 border-t border-neutral-100 shrink-0">
               <div className="flex gap-2 items-center">
                 <input
@@ -612,7 +625,7 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
               </div>
             </div>
           </div>
-        </>
+        )
       ) : (
         /* ── Explore Mode ── */
         <>
