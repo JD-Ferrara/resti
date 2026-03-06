@@ -638,7 +638,7 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
               </div>
             </>
           )}
-        </>
+        </div>
       ) : (
         /* ── Explore Mode ── */
         <>
