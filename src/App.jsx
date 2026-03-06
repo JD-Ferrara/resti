@@ -521,24 +521,27 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
               Tell me the occasion — I'll ask a couple of questions<br className="hidden sm:block" />
               and point you somewhere worth going.
             </p>
-            <div className="flex flex-wrap gap-2 justify-center mb-5">
-              {[
-                ["First date", "Looking for a first date spot"],
-                ["Birthday dinner", "Planning a birthday dinner"],
-                ["After-work drinks", "Need a spot for after-work drinks"],
-                ["Business lunch", "Looking for a business lunch spot"],
-                ["Romantic night out", "Planning a romantic night out"],
-                ["Group outing", "Organizing a group outing"],
-              ].map(([label, msg]) => (
-                <button
-                  key={label}
-                  onClick={() => handleConciergeChat(msg)}
-                  className="px-4 py-2 rounded-full text-[12px] border border-neutral-200 text-neutral-500 hover:border-neutral-400 hover:text-neutral-800 transition-all bg-white"
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+            {!chatInput && (
+              <div className="flex flex-wrap gap-2 justify-center mb-5">
+                {[
+                  ["First date", "Looking for a first date spot"],
+                  ["Birthday dinner", "Planning a birthday dinner"],
+                  ["After-work drinks", "Need a spot for after-work drinks"],
+                  ["Business lunch", "Looking for a business lunch spot"],
+                  ["Romantic night out", "Planning a romantic night out"],
+                  ["Group outing", "Organizing a group outing"],
+                ].map(([label, msg]) => (
+                  <button
+                    key={label}
+                    onClick={() => handleConciergeChat(msg)}
+                    className="px-4 py-2 rounded-full text-[12px] border border-neutral-200 text-neutral-500 hover:border-neutral-400 hover:text-neutral-800 transition-all bg-white"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {chatInput && <div className="mb-5" />}
             {/* Input sits directly below pills */}
             <div className="w-full flex gap-2 items-center mt-1">
               <input
