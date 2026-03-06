@@ -104,7 +104,6 @@ ${RESTAURANT_CONTEXT}
 
 You only know these restaurants. If asked about somewhere else, be honest about it and bring the conversation back to what's here.`;
 
-const CONCIERGE_OPENING = "Hey! What's the occasion? Tell me what you're working with — who you're bringing, roughly when, and what kind of night you're after — and I'll find you the right spot.";
 
 function TagChip({ tag, category, active, onClick, onRemove }) {
   const label = TAG_CATEGORIES[category]?.tags[tag] || tag.replace(/_/g, " ");
@@ -360,9 +359,7 @@ export default function App() {
 
   // App mode + Concierge state
   const [mode, setMode] = useState("explore");
-  const [chatMessages, setChatMessages] = useState([
-    { role: "assistant", content: CONCIERGE_OPENING },
-  ]);
+  const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const chatEndRef = useRef(null);
@@ -427,9 +424,10 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
     setAiLoading(false);
   };
 
-  const handleConciergeChat = async () => {
-    if (!chatInput.trim() || chatLoading) return;
-    const userMessage = { role: "user", content: chatInput.trim() };
+  const handleConciergeChat = async (overrideText) => {
+    const text = overrideText ?? chatInput;
+    if (!text.trim() || chatLoading) return;
+    const userMessage = { role: "user", content: text.trim() };
     const newMessages = [...chatMessages, userMessage];
     setChatMessages(newMessages);
     setChatInput("");
@@ -500,14 +498,33 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
           </div>
 
           <div className="flex items-center gap-2.5">
-            {/* Search — only visible in Explore mode */}
-            {mode === "explore" && (
+            {mode === "explore" ? (
+              /* Search — Explore mode */
               <div className="relative">
                 <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-neutral-400 pointer-events-none" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8">
                   <circle cx="5.5" cy="5.5" r="4"/><path d="M12 12l-2.5-2.5"/>
                 </svg>
                 <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search…"
                   className="pl-7 pr-3 py-[5px] text-[12px] bg-neutral-100 rounded-full border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-300 w-36 transition-all duration-200 focus:w-48" />
+              </div>
+            ) : (
+              /* Chat input — Concierge mode */
+              <div className="flex gap-1.5 items-center">
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={e => setChatInput(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && !e.shiftKey && handleConciergeChat()}
+                  placeholder="Tell me what you're planning…"
+                  className="w-56 px-3 py-[5px] text-[12px] bg-neutral-100 rounded-full border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-300 transition-all duration-200 focus:w-72"
+                />
+                <button
+                  onClick={() => handleConciergeChat()}
+                  disabled={!chatInput.trim() || chatLoading}
+                  className="shrink-0 px-3 py-[5px] rounded-full text-[12px] font-medium bg-neutral-900 text-white hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150"
+                >
+                  Send
+                </button>
               </div>
             )}
           </div>
@@ -518,19 +535,49 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
         /* ── Concierge Chat Mode ── */
         <div className="max-w-2xl mx-auto px-6 flex flex-col" style={{ height: "calc(100vh - 3rem)" }}>
 
-          {/* Messages */}
+          {/* Messages / Landing */}
           <div className="flex-1 overflow-y-auto py-6 space-y-4">
-            {chatMessages.map((msg, i) => (
-              <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                <div className={`max-w-[82%] px-4 py-2.5 rounded-2xl text-[13px] leading-relaxed whitespace-pre-wrap
-                  ${msg.role === "user"
-                    ? "bg-neutral-900 text-white rounded-br-sm"
-                    : "bg-white border border-neutral-100 text-neutral-800 rounded-bl-sm shadow-sm"
-                  }`}>
-                  {msg.content}
+            {chatMessages.length === 0 ? (
+              /* Landing state */
+              <div className="text-center py-20">
+                <p className="text-[15px] font-medium text-neutral-700 mb-2">Your Hudson Yards concierge</p>
+                <p className="text-[13px] text-neutral-400 leading-relaxed">
+                  Tell me the occasion and I'll find you the right spot.<br className="hidden sm:block" />
+                  I'll ask a couple questions before making a call.
+                </p>
+                <div className="mt-6 flex flex-wrap gap-2 justify-center">
+                  {[
+                    ["First date", "Looking for a first date spot"],
+                    ["Birthday dinner", "Planning a birthday dinner"],
+                    ["After-work drinks", "Need a spot for after-work drinks"],
+                    ["Business lunch", "Looking for a business lunch spot"],
+                    ["Romantic night out", "Planning a romantic night out"],
+                    ["Group outing", "Organizing a group outing"],
+                  ].map(([label, msg]) => (
+                    <button
+                      key={label}
+                      onClick={() => handleConciergeChat(msg)}
+                      className="px-4 py-2 rounded-full text-[12px] border border-neutral-200 text-neutral-500 hover:border-neutral-400 hover:text-neutral-800 transition-all bg-white"
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
               </div>
-            ))}
+            ) : (
+              /* Chat thread */
+              chatMessages.map((msg, i) => (
+                <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                  <div className={`max-w-[82%] px-4 py-2.5 rounded-2xl text-[13px] leading-relaxed whitespace-pre-wrap
+                    ${msg.role === "user"
+                      ? "bg-neutral-900 text-white rounded-br-sm"
+                      : "bg-white border border-neutral-100 text-neutral-800 rounded-bl-sm shadow-sm"
+                    }`}>
+                    {msg.content}
+                  </div>
+                </div>
+              ))
+            )}
 
             {/* Typing indicator */}
             {chatLoading && (
@@ -545,25 +592,6 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
               </div>
             )}
             <div ref={chatEndRef} />
-          </div>
-
-          {/* Input bar */}
-          <div className="flex gap-2 items-center border-t border-neutral-100 py-4">
-            <input
-              type="text"
-              value={chatInput}
-              onChange={e => setChatInput(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && !e.shiftKey && handleConciergeChat()}
-              placeholder="Tell me what you're planning…"
-              className="flex-1 px-4 py-2.5 text-[13px] bg-neutral-50 border border-neutral-200 rounded-xl text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-300 focus:border-transparent transition-all"
-            />
-            <button
-              onClick={handleConciergeChat}
-              disabled={!chatInput.trim() || chatLoading}
-              className="shrink-0 px-4 py-2.5 rounded-xl text-[13px] font-medium bg-neutral-900 text-white hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150"
-            >
-              Send
-            </button>
           </div>
         </div>
       ) : (
