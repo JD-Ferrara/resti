@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 
 // Creator registry — single source of truth
 const CREATORS = {
@@ -50,7 +50,6 @@ const RESTAURANTS = [
   { id: 10, name: "Mercado Little Spain", cuisine: "Spanish Market / Hall", price: 2, address: "10 Hudson Yards", website: "https://www.littlespain.com", instagram: "https://www.instagram.com/mercadolittlespain/", reservation: null, sources: [{ label: "The Infatuation", url: "https://www.theinfatuation.com/new-york/reviews/mercado-little-spain" }, { label: "NY Times", url: "https://www.nytimes.com/2019/03/14/dining/mercado-little-spain-review.html" }], tags: { occasion: ["saturday_night_out","sunday_brunch","birthday_dinner"], vibe: ["buzzy_lively","unpretentious"], drinks: ["standard_bar","natural_wine"], food: ["sharing_plates","bar_snacks_only"], group: ["large_group","family_friendly"], value: ["great_value"], dietary: ["vegetarian_friendly"] }, notes: "José Andrés food hall. NY Times: more great food per square foot than anywhere in NYC. Go with a group and try everything." },
   { id: 11, name: "La Barra", cuisine: "Spanish Tapas", price: 2, address: "Inside Mercado Little Spain, 10 Hudson Yards", website: "https://www.littlespain.com", instagram: "https://www.instagram.com/mercadolittlespain/", reservation: "https://www.opentable.com/r/la-barra-new-york", sources: [{ label: "OpenTable", url: "https://www.opentable.com/r/la-barra-new-york" }], tags: { occasion: ["after_work_drinks","saturday_night_out"], vibe: ["buzzy_lively","unpretentious"], drinks: ["standard_bar","natural_wine"], food: ["sharing_plates"], group: ["large_group"], value: ["great_value","happy_hour_deal"], dietary: ["vegetarian_friendly"] }, notes: "Best happy hour in Hudson Yards. Solid tapas, great wine by the glass, zero attitude." },
   { id: 12, name: "Miznon", cuisine: "Israeli Street Food", price: 1, address: "10 Hudson Yards", website: "https://www.miznon.com/nyc", instagram: "https://www.instagram.com/miznon_usa/", reservation: null, sources: [{ label: "The Infatuation", url: "https://www.theinfatuation.com/new-york/reviews/miznon-hudson-yards" }, { label: "Eater NY", url: "https://ny.eater.com/venue/miznon-hudson-yards" }], tags: { occasion: ["business_lunch","sunday_brunch"], vibe: ["unpretentious","buzzy_lively"], drinks: ["standard_bar"], food: ["bar_snacks_only","sharing_plates"], group: ["solo_friendly","family_friendly"], value: ["great_value","budget_friendly"], dietary: ["vegetarian_friendly"] }, notes: "No-frills Israeli pita counter. Whole-roasted cauliflower pita is a signature. Best quick lunch in the neighborhood." },
-
   { id: 14, name: "Bronx Brewery Kitchen", cuisine: "Bar / American", price: 1, address: "Level 2, Hudson Yards Shops", website: "https://www.thebronxbrewery.com/hudson-yards", instagram: "https://www.instagram.com/bronxbrewery/", reservation: null, sources: [{ label: "Hudson Yards", url: "https://www.hudsonyardsnewyork.com/food-drink/bronx-brewery" }], tags: { occasion: ["after_work_drinks","saturday_night_out"], vibe: ["unpretentious","cozy"], drinks: ["great_beer_selection","standard_bar"], food: ["bar_snacks_only"], group: ["watch_games_with_friends","large_group","solo_friendly"], value: ["great_value","budget_friendly"], dietary: [] }, notes: "Best spot in the neighborhood to catch a game. Relaxed, no pretense, solid rotating taps." },
   { id: 15, name: "Shake Shack", cuisine: "Fast Casual American", price: 1, address: "Hudson Yards", website: "https://www.shakeshack.com/location/hudson-yards-nyc/", instagram: "https://www.instagram.com/shakeshack/", reservation: null, sources: [], tags: { occasion: ["business_lunch"], vibe: ["unpretentious"], drinks: ["standard_bar"], food: ["traditional_entrees"], group: ["solo_friendly","family_friendly"], value: ["great_value","budget_friendly"], dietary: [] }, notes: "It's Shake Shack. Reliable, fast, no surprises." },
   { id: 16, name: "Limusina", cuisine: "Upscale Mexican", price: 3, address: "441 9th Avenue", website: "https://www.limusina.com", instagram: "https://www.instagram.com/limusinanyc/", reservation: "https://resy.com/cities/new-york-ny/venues/limusina", sources: [{ label: "The Infatuation", url: "https://www.theinfatuation.com/new-york/reviews/limusina" }, { label: "Eater NY", url: "https://ny.eater.com/venue/limusina-nyc" }, { label: "Robb Report", url: "https://robbreport.com/food-drink/dining/limusina-quality-branded-mexican-restaurant-nyc-1237037953/" }], tags: { occasion: ["saturday_night_out","birthday_dinner","first_date","after_work_drinks"], vibe: ["trendy_scene","buzzy_lively","grand_impressive"], drinks: ["craft_cocktails","destination_bar"], food: ["sharing_plates","chef_driven"], group: ["large_group","couples_only_vibe"], value: ["worth_the_splurge"], dietary: ["vegetarian_friendly"] }, notes: "Newest Quality Branded hotspot (Don Angie, Zou Zou's). 3-level former parking garage. Great drinks and snacks." },
@@ -80,6 +79,23 @@ const TAG_CATEGORIES = {
 
 const PRICE_LABELS = { 1: "$", 2: "$$", 3: "$$$", 4: "$$$$" };
 const CAT_ACCENT = { occasion: "#D4163C", vibe: "#6D28D9", drinks: "#0369A1", food: "#B45309", group: "#047857", dietary: "#065F46", value: "#1E40AF" };
+
+// Concierge system prompt — built from live restaurant data so it's always in sync
+const RESTAURANT_CONTEXT = RESTAURANTS.map(r =>
+  `${r.name} (${r.cuisine}, ${PRICE_LABELS[r.price]}, ${r.address}): ${r.notes}`
+).join("\n");
+
+const CONCIERGE_SYSTEM = `You are a friendly, opinionated restaurant concierge for resti — a curated guide to restaurants in the Hudson Yards area of NYC. Help users find the perfect spot for any occasion.
+
+Restaurants in this guide:
+${RESTAURANT_CONTEXT}
+
+Guidelines:
+- Give direct, specific recommendations with brief reasons why
+- Keep responses concise (3–5 sentences) unless the user asks for more detail
+- Mention price level ($ to $$$$) when relevant
+- If you need more info to recommend well, ask one focused question
+- You only know about restaurants in this guide — say so if asked about others`;
 
 function TagChip({ tag, category, active, onClick, onRemove }) {
   const label = TAG_CATEGORIES[category]?.tags[tag] || tag.replace(/_/g, " ");
@@ -153,11 +169,11 @@ function CreatorVoices({ voices }) {
 function Card({ r, activeTags, onTagClick }) {
   const [tagsExpanded, setTagsExpanded] = useState(false);
   const allTags = Object.entries(r.tags).flatMap(([cat, ts]) => ts.map(t => ({ tag: t, category: cat })));
-  
+
   // Priority order for which tags show first
   const PRIORITY_CATS = ["occasion", "vibe", "drinks", "food", "group", "value", "dietary"];
   const sortedTags = [...allTags].sort((a, b) => PRIORITY_CATS.indexOf(a.category) - PRIORITY_CATS.indexOf(b.category));
-  
+
   const PREVIEW_COUNT = 4;
   const visibleTags = tagsExpanded ? sortedTags : sortedTags.slice(0, PREVIEW_COUNT);
   const hiddenCount = sortedTags.length - PREVIEW_COUNT;
@@ -299,8 +315,8 @@ function Sidebar({ activeTags, onTagToggle, onClear, priceFilter, onPriceToggle,
                         ))}
                       </div>
                     </div>
-                    <p className={`text-[10px] mt-0.5 ${active ? "text-neutral-300" : "text-neutral-400"}`}>@{c.primaryHandle}</p>
                   </div>
+                  <p className={`text-[10px] mt-0.5 ${active ? "text-neutral-300" : "text-neutral-400"}`}>@{c.primaryHandle}</p>
                 </button>
               );
             })}
@@ -323,6 +339,7 @@ function Sidebar({ activeTags, onTagToggle, onClear, priceFilter, onPriceToggle,
 }
 
 export default function App() {
+  // Explore mode state
   const [activeTags, setActiveTags] = useState([]);
   const [search, setSearch] = useState("");
   const [priceFilter, setPriceFilter] = useState([]);
@@ -331,6 +348,13 @@ export default function App() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiLabel, setAiLabel] = useState("");
   const [aiError, setAiError] = useState("");
+
+  // App mode + Concierge state
+  const [mode, setMode] = useState("explore");
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const chatEndRef = useRef(null);
 
   const handleTagToggle = (tag, category) => {
     setActiveTags(prev => {
@@ -360,17 +384,14 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
 [{"tag": "first_date", "category": "occasion"}, {"tag": "intimate_quiet", "category": "vibe"}]`;
 
     try {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${""}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0.1, maxOutputTokens: 500 }
-          })
-        }
-      );
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: 500,
+        }),
+      });
 
       if (!res.ok) {
         const errText = await res.text();
@@ -378,7 +399,7 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
       }
 
       const data = await res.json();
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "[]";
+      const text = data.content?.[0]?.text || "[]";
       const clean = text.replace(/```json|```/g, "").trim();
       const tags = JSON.parse(clean);
       const validTags = Array.isArray(tags) ? tags.filter(t => TAG_CATEGORIES[t.category]?.tags[t.tag]) : [];
@@ -394,6 +415,38 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
     }
     setAiLoading(false);
   };
+
+  const handleConciergeChat = async () => {
+    if (!chatInput.trim() || chatLoading) return;
+    const userMessage = { role: "user", content: chatInput.trim() };
+    const newMessages = [...chatMessages, userMessage];
+    setChatMessages(newMessages);
+    setChatInput("");
+    setChatLoading(true);
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          system: CONCIERGE_SYSTEM,
+          messages: newMessages,
+          max_tokens: 512,
+        }),
+      });
+
+      const data = await res.json();
+      const reply = data.content?.[0]?.text || "Sorry, I couldn't get a response. Please try again.";
+      setChatMessages(prev => [...prev, { role: "assistant", content: reply }]);
+    } catch {
+      setChatMessages(prev => [...prev, { role: "assistant", content: "Something went wrong. Please try again." }]);
+    }
+    setChatLoading(false);
+  };
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatMessages]);
 
   const filtered = useMemo(() => RESTAURANTS.filter(r => {
     const q = search.toLowerCase();
@@ -419,103 +472,202 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
             <span className="hidden sm:inline text-[11px] text-neutral-300 tracking-[0.06em] font-normal">Hudson Yards · NYC</span>
           </div>
 
+          {/* Mode Toggle */}
+          <div className="flex items-center gap-1 bg-neutral-100 rounded-full p-0.5">
+            <button
+              onClick={() => setMode("explore")}
+              className={`px-4 py-1 rounded-full text-[12px] font-medium transition-all duration-150 ${mode === "explore" ? "bg-white text-neutral-900 shadow-sm" : "text-neutral-500 hover:text-neutral-800"}`}
+            >
+              Explore
+            </button>
+            <button
+              onClick={() => setMode("concierge")}
+              className={`px-4 py-1 rounded-full text-[12px] font-medium transition-all duration-150 ${mode === "concierge" ? "bg-white text-neutral-900 shadow-sm" : "text-neutral-500 hover:text-neutral-800"}`}
+            >
+              Concierge
+            </button>
+          </div>
+
           <div className="flex items-center gap-2.5">
-            {/* Search */}
-            <div className="relative">
-              <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-neutral-400 pointer-events-none" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <circle cx="5.5" cy="5.5" r="4"/><path d="M12 12l-2.5-2.5"/>
-              </svg>
-              <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search…"
-                className="pl-7 pr-3 py-[5px] text-[12px] bg-neutral-100 rounded-full border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-300 w-36 transition-all duration-200 focus:w-48" />
-            </div>
+            {/* Search — only visible in Explore mode */}
+            {mode === "explore" && (
+              <div className="relative">
+                <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-neutral-400 pointer-events-none" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <circle cx="5.5" cy="5.5" r="4"/><path d="M12 12l-2.5-2.5"/>
+                </svg>
+                <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search…"
+                  className="pl-7 pr-3 py-[5px] text-[12px] bg-neutral-100 rounded-full border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-300 w-36 transition-all duration-200 focus:w-48" />
+              </div>
+            )}
           </div>
         </div>
       </header>
 
-      {/* AI Search Bar */}
-      <div className="bg-white border-b border-neutral-100">
-        <div className="max-w-[1100px] mx-auto px-8 py-4">
-          <div className="flex gap-2 items-center">
-            <div className="flex-1 relative">
-              <div className="absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none">
-                <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
-                  <path d="M10 2C10 2 7 6 7 10s3 8 3 8M10 2c0 0 3 4 3 8s-3 8-3 8M2 10h16M2.5 7h15M2.5 13h15" stroke="#aaa" strokeWidth="1.4" strokeLinecap="round"/>
-                </svg>
+      {mode === "concierge" ? (
+        /* ── Concierge Chat Mode ── */
+        <div className="max-w-2xl mx-auto px-6 flex flex-col" style={{ height: "calc(100vh - 3rem)" }}>
+
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto py-6 space-y-4">
+            {chatMessages.length === 0 ? (
+              <div className="text-center py-20">
+                <p className="text-[15px] font-medium text-neutral-700 mb-2">Your Hudson Yards concierge</p>
+                <p className="text-[13px] text-neutral-400 leading-relaxed">
+                  Ask me anything — a proposal dinner, post-work drinks,<br className="hidden sm:block" /> a solo lunch, or a birthday night out.
+                </p>
+                <div className="mt-6 flex flex-col gap-2 items-center">
+                  {[
+                    "Where should I take someone for a first date?",
+                    "Best spot for a big birthday group?",
+                    "Where can I get a great business lunch that isn't stuffy?",
+                  ].map(q => (
+                    <button
+                      key={q}
+                      onClick={() => { setChatInput(q); }}
+                      className="px-4 py-2 rounded-full text-[12px] border border-neutral-200 text-neutral-500 hover:border-neutral-400 hover:text-neutral-800 transition-all bg-white"
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <input
-                type="text"
-                value={aiInput}
-                onChange={e => { setAiInput(e.target.value); setAiError(""); }}
-                onKeyDown={e => e.key === "Enter" && handleAiSearch()}
-                placeholder={'Describe what you\'re looking for... e.g. "romantic dinner to propose at" or "casual drinks after work with coworkers"'}
-                className="w-full pl-9 pr-4 py-2.5 text-[13px] bg-neutral-50 border border-neutral-200 rounded-xl text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-300 focus:border-transparent transition-all"
-              />
-            </div>
+            ) : (
+              chatMessages.map((msg, i) => (
+                <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                  <div className={`max-w-[82%] px-4 py-2.5 rounded-2xl text-[13px] leading-relaxed whitespace-pre-wrap
+                    ${msg.role === "user"
+                      ? "bg-neutral-900 text-white rounded-br-sm"
+                      : "bg-white border border-neutral-100 text-neutral-800 rounded-bl-sm shadow-sm"
+                    }`}>
+                    {msg.content}
+                  </div>
+                </div>
+              ))
+            )}
+
+            {/* Typing indicator */}
+            {chatLoading && (
+              <div className="flex justify-start">
+                <div className="bg-white border border-neutral-100 rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm">
+                  <div className="flex gap-1.5 items-center">
+                    <span className="w-1.5 h-1.5 rounded-full bg-neutral-300 animate-bounce" style={{ animationDelay: "0ms" }} />
+                    <span className="w-1.5 h-1.5 rounded-full bg-neutral-300 animate-bounce" style={{ animationDelay: "150ms" }} />
+                    <span className="w-1.5 h-1.5 rounded-full bg-neutral-300 animate-bounce" style={{ animationDelay: "300ms" }} />
+                  </div>
+                </div>
+              </div>
+            )}
+            <div ref={chatEndRef} />
+          </div>
+
+          {/* Input bar */}
+          <div className="flex gap-2 items-center border-t border-neutral-100 py-4">
+            <input
+              type="text"
+              value={chatInput}
+              onChange={e => setChatInput(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && !e.shiftKey && handleConciergeChat()}
+              placeholder="Ask about a restaurant or occasion…"
+              className="flex-1 px-4 py-2.5 text-[13px] bg-neutral-50 border border-neutral-200 rounded-xl text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-300 focus:border-transparent transition-all"
+            />
             <button
-              onClick={handleAiSearch}
-              disabled={!aiInput.trim() || aiLoading}
-              className="shrink-0 px-4 py-2.5 rounded-xl text-[13px] font-medium transition-all duration-150 bg-neutral-900 text-white hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
+              onClick={handleConciergeChat}
+              disabled={!chatInput.trim() || chatLoading}
+              className="shrink-0 px-4 py-2.5 rounded-xl text-[13px] font-medium bg-neutral-900 text-white hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150"
             >
-              {aiLoading ? (
-                <>
-                  <svg className="animate-spin" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
-                  </svg>
-                  Thinking…
-                </>
-              ) : (
-                <>
-                  <svg width="13" height="13" viewBox="0 0 20 20" fill="currentColor">
-                    <path d="M10 1l2.39 6.626L19 10l-6.61 2.374L10 19l-2.39-6.626L1 10l6.61-2.374L10 1z"/>
-                  </svg>
-                  Find
-                </>
-              )}
+              Send
             </button>
           </div>
-          {aiLabel && (
-            <p className="mt-2 text-[11px] text-neutral-400">
-              Showing results for <span className="text-neutral-600 font-medium">&#34;{aiLabel}&#34;</span>
-              <button onClick={() => { setActiveTags([]); setAiLabel(""); }} className="ml-2 text-neutral-400 hover:text-neutral-700 underline underline-offset-2">clear</button>
-            </p>
-          )}
-          {aiError && (
-            <p className="mt-2 text-[11px] text-red-500">{aiError}</p>
-          )}
         </div>
-      </div>
-
-      {/* Active filter bar */}
-      {activeTags.length > 0 && (
-        <div className="bg-white border-b border-neutral-100">
-          <div className="max-w-[1100px] mx-auto px-8 py-2 flex items-center gap-2 flex-wrap">
-            <span className="text-[10px] text-neutral-400 tracking-wider uppercase">Active</span>
-            {activeTags.map(({ tag, category }) => (
-              <TagChip key={`${category}-${tag}`} tag={tag} category={category} active onRemove={handleTagToggle} />
-            ))}
+      ) : (
+        /* ── Explore Mode ── */
+        <>
+          {/* AI Search Bar */}
+          <div className="bg-white border-b border-neutral-100">
+            <div className="max-w-[1100px] mx-auto px-8 py-4">
+              <div className="flex gap-2 items-center">
+                <div className="flex-1 relative">
+                  <div className="absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none">
+                    <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
+                      <path d="M10 2C10 2 7 6 7 10s3 8 3 8M10 2c0 0 3 4 3 8s-3 8-3 8M2 10h16M2.5 7h15M2.5 13h15" stroke="#aaa" strokeWidth="1.4" strokeLinecap="round"/>
+                    </svg>
+                  </div>
+                  <input
+                    type="text"
+                    value={aiInput}
+                    onChange={e => { setAiInput(e.target.value); setAiError(""); }}
+                    onKeyDown={e => e.key === "Enter" && handleAiSearch()}
+                    placeholder={'Describe what you\'re looking for... e.g. "romantic dinner to propose at" or "casual drinks after work with coworkers"'}
+                    className="w-full pl-9 pr-4 py-2.5 text-[13px] bg-neutral-50 border border-neutral-200 rounded-xl text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-300 focus:border-transparent transition-all"
+                  />
+                </div>
+                <button
+                  onClick={handleAiSearch}
+                  disabled={!aiInput.trim() || aiLoading}
+                  className="shrink-0 px-4 py-2.5 rounded-xl text-[13px] font-medium transition-all duration-150 bg-neutral-900 text-white hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {aiLoading ? (
+                    <>
+                      <svg className="animate-spin" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                        <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                      </svg>
+                      Thinking…
+                    </>
+                  ) : (
+                    <>
+                      <svg width="13" height="13" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M10 1l2.39 6.626L19 10l-6.61 2.374L10 19l-2.39-6.626L1 10l6.61-2.374L10 1z"/>
+                      </svg>
+                      Find
+                    </>
+                  )}
+                </button>
+              </div>
+              {aiLabel && (
+                <p className="mt-2 text-[11px] text-neutral-400">
+                  Showing results for <span className="text-neutral-600 font-medium">&#34;{aiLabel}&#34;</span>
+                  <button onClick={() => { setActiveTags([]); setAiLabel(""); }} className="ml-2 text-neutral-400 hover:text-neutral-700 underline underline-offset-2">clear</button>
+                </p>
+              )}
+              {aiError && (
+                <p className="mt-2 text-[11px] text-red-500">{aiError}</p>
+              )}
+            </div>
           </div>
-        </div>
-      )}
 
-      {/* Layout */}
-      <div className="max-w-[1100px] mx-auto px-8 flex gap-8 pt-6 pb-16">
-        <Sidebar activeTags={activeTags} onTagToggle={handleTagToggle} onClear={() => { setActiveTags([]); setCreatorFilter([]); }} priceFilter={priceFilter} onPriceToggle={p => setPriceFilter(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p])} creatorFilter={creatorFilter} onCreatorToggle={id => setCreatorFilter(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])} />
-
-        <main className="flex-1 min-w-0">
-          <p className="text-[11px] text-neutral-400 mb-5 tracking-wider uppercase">
-            {filtered.length === RESTAURANTS.length ? `${RESTAURANTS.length} restaurants` : `${filtered.length} of ${RESTAURANTS.length}`}
-          </p>
-          {filtered.length === 0 ? (
-            <div className="text-center py-24">
-              <p className="text-[14px] text-neutral-400">No matches — try removing a filter.</p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3.5">
-              {filtered.map(r => <Card key={r.id} r={r} activeTags={activeTags} onTagClick={handleTagToggle} />)}
+          {/* Active filter bar */}
+          {activeTags.length > 0 && (
+            <div className="bg-white border-b border-neutral-100">
+              <div className="max-w-[1100px] mx-auto px-8 py-2 flex items-center gap-2 flex-wrap">
+                <span className="text-[10px] text-neutral-400 tracking-wider uppercase">Active</span>
+                {activeTags.map(({ tag, category }) => (
+                  <TagChip key={`${category}-${tag}`} tag={tag} category={category} active onRemove={handleTagToggle} />
+                ))}
+              </div>
             </div>
           )}
-        </main>
-      </div>
+
+          {/* Layout */}
+          <div className="max-w-[1100px] mx-auto px-8 flex gap-8 pt-6 pb-16">
+            <Sidebar activeTags={activeTags} onTagToggle={handleTagToggle} onClear={() => { setActiveTags([]); setCreatorFilter([]); }} priceFilter={priceFilter} onPriceToggle={p => setPriceFilter(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p])} creatorFilter={creatorFilter} onCreatorToggle={id => setCreatorFilter(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])} />
+
+            <main className="flex-1 min-w-0">
+              <p className="text-[11px] text-neutral-400 mb-5 tracking-wider uppercase">
+                {filtered.length === RESTAURANTS.length ? `${RESTAURANTS.length} restaurants` : `${filtered.length} of ${RESTAURANTS.length}`}
+              </p>
+              {filtered.length === 0 ? (
+                <div className="text-center py-24">
+                  <p className="text-[14px] text-neutral-400">No matches — try removing a filter.</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-3.5">
+                  {filtered.map(r => <Card key={r.id} r={r} activeTags={activeTags} onTagClick={handleTagToggle} />)}
+                </div>
+              )}
+            </main>
+          </div>
+        </>
+      )}
     </div>
   );
 }
