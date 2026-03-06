@@ -560,10 +560,10 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
           </div>
         ) : (
           /* ── Concierge Active Chat State ── */
-          <div className="max-w-2xl mx-auto px-6 flex flex-col w-full" style={{ height: "calc(100vh - 3rem)" }}>
+          <div className="max-w-2xl mx-auto px-6 w-full pb-16">
 
-            {/* Start Over — lives inside the flex column so it's always visible, never scrolls */}
-            <div className="pt-3 pb-1 shrink-0">
+            {/* Start Over */}
+            <div className="pt-3 pb-4">
               <button
                 onClick={() => { setChatMessages([]); setChatInput(""); }}
                 className="flex items-center gap-1 text-[11px] text-neutral-400 hover:text-neutral-700 transition-colors"
@@ -575,8 +575,8 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
               </button>
             </div>
 
-            {/* Messages — scrollable */}
-            <div className="flex-1 overflow-y-auto pb-4 space-y-4">
+            {/* Messages — natural page flow */}
+            <div className="space-y-4">
               {chatMessages.map((msg, i) => (
                 <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
                   <div className={`max-w-[82%] px-4 py-2.5 rounded-2xl text-[13px] leading-relaxed whitespace-pre-wrap
@@ -601,28 +601,25 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
                   </div>
                 </div>
               )}
-              <div ref={chatEndRef} />
             </div>
 
-            {/* Input — pinned at bottom */}
-            <div className="py-4 border-t border-neutral-100 shrink-0">
-              <div className="flex gap-2 items-center">
-                <input
-                  type="text"
-                  value={chatInput}
-                  onChange={e => setChatInput(e.target.value)}
-                  onKeyDown={e => e.key === "Enter" && !e.shiftKey && handleConciergeChat()}
-                  placeholder="Tell me what you're planning…"
-                  className="flex-1 px-4 py-2.5 text-[13px] bg-neutral-100 rounded-full border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-300 transition-all"
-                />
-                <button
-                  onClick={() => handleConciergeChat()}
-                  disabled={!chatInput.trim() || chatLoading}
-                  className="shrink-0 px-4 py-2.5 rounded-full text-[13px] font-medium bg-neutral-900 text-white hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150"
-                >
-                  Send
-                </button>
-              </div>
+            {/* Input — inline after messages, scrolls into view with them */}
+            <div className="mt-4 flex gap-2 items-center" ref={chatEndRef}>
+              <input
+                type="text"
+                value={chatInput}
+                onChange={e => setChatInput(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && !e.shiftKey && handleConciergeChat()}
+                placeholder="Tell me what you're planning…"
+                className="flex-1 px-4 py-2.5 text-[13px] bg-neutral-100 rounded-full border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-300 transition-all"
+              />
+              <button
+                onClick={() => handleConciergeChat()}
+                disabled={!chatInput.trim() || chatLoading}
+                className="shrink-0 px-4 py-2.5 rounded-full text-[13px] font-medium bg-neutral-900 text-white hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150"
+              >
+                Send
+              </button>
             </div>
           </div>
         )
