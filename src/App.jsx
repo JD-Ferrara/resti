@@ -85,17 +85,26 @@ const RESTAURANT_CONTEXT = RESTAURANTS.map(r =>
   `${r.name} (${r.cuisine}, ${PRICE_LABELS[r.price]}, ${r.address}): ${r.notes}`
 ).join("\n");
 
-const CONCIERGE_SYSTEM = `You are a friendly, opinionated restaurant concierge for resti — a curated guide to restaurants in the Hudson Yards area of NYC. Help users find the perfect spot for any occasion.
+const CONCIERGE_SYSTEM = `You are a trusted friend who knows every restaurant in the Hudson Yards area of NYC better than anyone. You're warm, direct, and opinionated — the person in every friend group who always knows exactly where to go and why. You've been curating this neighborhood for friends, coworkers, dates, and family for years.
+
+Your approach before recommending anything:
+- Never assume. Always ask 2–3 natural questions to understand the full picture before giving a recommendation. You need to know: who they're with (or going solo), what the occasion or vibe is, roughly what time/day they're thinking, and any relevant preferences (budget, cuisine, dietary needs).
+- Ask these questions conversationally — not all at once like a form. Start with the most important unknown and let the conversation flow. Mix up how you phrase things. Don't start every response the same way.
+- If the person gives you enough detail upfront (occasion + party + time + vibe), you can skip straight to a recommendation. Use judgment.
+
+When you have enough context:
+- Give one clear primary recommendation and one strong backup. Be specific about why each fits their exact situation — not a generic description, but a real reason tied to what they told you.
+- Be confident and opinionated. If somewhere is the obvious right call, say it. If something doesn't fit what they described, be honest.
+- Keep responses concise and human. No bullet walls. No stiff AI-speak. Talk like a friend giving real advice over text.
+
+After recommending, stay in the conversation. If they want a different vibe, a different price point, or have follow-up questions — help them pivot. This is a dialogue, not a one-shot answer.
 
 Restaurants in this guide:
 ${RESTAURANT_CONTEXT}
 
-Guidelines:
-- Give direct, specific recommendations with brief reasons why
-- Keep responses concise (3–5 sentences) unless the user asks for more detail
-- Mention price level ($ to $$$$) when relevant
-- If you need more info to recommend well, ask one focused question
-- You only know about restaurants in this guide — say so if asked about others`;
+You only know these restaurants. If asked about somewhere else, be honest about it and bring the conversation back to what's here.`;
+
+const CONCIERGE_OPENING = "Hey! What's the occasion? Tell me what you're working with — who you're bringing, roughly when, and what kind of night you're after — and I'll find you the right spot.";
 
 function TagChip({ tag, category, active, onClick, onRemove }) {
   const label = TAG_CATEGORIES[category]?.tags[tag] || tag.replace(/_/g, " ");
@@ -351,7 +360,9 @@ export default function App() {
 
   // App mode + Concierge state
   const [mode, setMode] = useState("explore");
-  const [chatMessages, setChatMessages] = useState([]);
+  const [chatMessages, setChatMessages] = useState([
+    { role: "assistant", content: CONCIERGE_OPENING },
+  ]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const chatEndRef = useRef(null);
@@ -431,7 +442,7 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
         body: JSON.stringify({
           system: CONCIERGE_SYSTEM,
           messages: newMessages,
-          max_tokens: 512,
+          max_tokens: 700,
         }),
       });
 
@@ -509,41 +520,17 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
 
           {/* Messages */}
           <div className="flex-1 overflow-y-auto py-6 space-y-4">
-            {chatMessages.length === 0 ? (
-              <div className="text-center py-20">
-                <p className="text-[15px] font-medium text-neutral-700 mb-2">Your Hudson Yards concierge</p>
-                <p className="text-[13px] text-neutral-400 leading-relaxed">
-                  Ask me anything — a proposal dinner, post-work drinks,<br className="hidden sm:block" /> a solo lunch, or a birthday night out.
-                </p>
-                <div className="mt-6 flex flex-col gap-2 items-center">
-                  {[
-                    "Where should I take someone for a first date?",
-                    "Best spot for a big birthday group?",
-                    "Where can I get a great business lunch that isn't stuffy?",
-                  ].map(q => (
-                    <button
-                      key={q}
-                      onClick={() => { setChatInput(q); }}
-                      className="px-4 py-2 rounded-full text-[12px] border border-neutral-200 text-neutral-500 hover:border-neutral-400 hover:text-neutral-800 transition-all bg-white"
-                    >
-                      {q}
-                    </button>
-                  ))}
+            {chatMessages.map((msg, i) => (
+              <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                <div className={`max-w-[82%] px-4 py-2.5 rounded-2xl text-[13px] leading-relaxed whitespace-pre-wrap
+                  ${msg.role === "user"
+                    ? "bg-neutral-900 text-white rounded-br-sm"
+                    : "bg-white border border-neutral-100 text-neutral-800 rounded-bl-sm shadow-sm"
+                  }`}>
+                  {msg.content}
                 </div>
               </div>
-            ) : (
-              chatMessages.map((msg, i) => (
-                <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                  <div className={`max-w-[82%] px-4 py-2.5 rounded-2xl text-[13px] leading-relaxed whitespace-pre-wrap
-                    ${msg.role === "user"
-                      ? "bg-neutral-900 text-white rounded-br-sm"
-                      : "bg-white border border-neutral-100 text-neutral-800 rounded-bl-sm shadow-sm"
-                    }`}>
-                    {msg.content}
-                  </div>
-                </div>
-              ))
-            )}
+            ))}
 
             {/* Typing indicator */}
             {chatLoading && (
@@ -567,7 +554,7 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
               value={chatInput}
               onChange={e => setChatInput(e.target.value)}
               onKeyDown={e => e.key === "Enter" && !e.shiftKey && handleConciergeChat()}
-              placeholder="Ask about a restaurant or occasion…"
+              placeholder="Tell me what you're planning…"
               className="flex-1 px-4 py-2.5 text-[13px] bg-neutral-50 border border-neutral-200 rounded-xl text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-300 focus:border-transparent transition-all"
             />
             <button
