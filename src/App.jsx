@@ -455,9 +455,13 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
   };
 
   useEffect(() => {
-    if (messagesScrollRef.current) {
-      messagesScrollRef.current.scrollTop = messagesScrollRef.current.scrollHeight;
-    }
+    // rAF ensures the messages container is in the DOM before we scroll
+    // (critical on first message when the container just mounted)
+    requestAnimationFrame(() => {
+      if (messagesScrollRef.current) {
+        messagesScrollRef.current.scrollTop = messagesScrollRef.current.scrollHeight;
+      }
+    });
   }, [chatMessages]);
 
   const filtered = useMemo(() => RESTAURANTS.filter(r => {
@@ -545,10 +549,12 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
           </div>
 
           {chatMessages.length === 0 ? (
-            /* ── Landing: vertically centered in remaining space ── */
-            <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
-              <div className="w-full max-w-2xl">
-                <div className="flex flex-wrap gap-2 justify-center mb-5">
+            /* ── Landing: pills above input, both anchored to bottom like iOS ── */
+            <div className="flex-1 flex flex-col">
+              {/* Spacer pushes content to bottom */}
+              <div className="flex-1" />
+              <div className="max-w-2xl mx-auto w-full px-6 pb-4">
+                <div className="flex flex-wrap gap-2 justify-center mb-4">
                   {[
                     ["First date", "Looking for a first date spot"],
                     ["Birthday dinner", "Planning a birthday dinner"],
@@ -616,8 +622,8 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
                 </div>
               </div>
 
-              {/* Input — always pinned at bottom */}
-              <div className="shrink-0 border-t border-neutral-100 bg-[#FAF8F5] px-6 py-3">
+              {/* Input — always pinned at bottom, same padding as landing */}
+              <div className="shrink-0 border-t border-neutral-100 bg-[#FAF8F5] px-6 pt-3 pb-4">
                 <div className="max-w-2xl mx-auto flex gap-2 items-center">
                   <input
                     type="text"
