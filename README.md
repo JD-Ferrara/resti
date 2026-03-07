@@ -2,9 +2,9 @@
 
 ---
 
-## Part 1 — Get your Gemini API key
+## Part 1 — Get your Claude API key
 
-1. Go to https://aistudio.google.com/app/apikey
+1. Go to https://platform.claude.com/
 2. Sign in with your Google account
 3. Click **Create API Key**
 4. Copy the key — it looks like a long string of letters and numbers
@@ -47,7 +47,7 @@ cp .env.example .env.local
 1. Open the resti folder in Finder/File Explorer
 2. Show hidden files: Mac = Cmd+Shift+. / Windows = View > check Hidden Items
 3. Open .env.local in any text editor
-4. Replace your_gemini_api_key_here with your actual key from Part 1
+4. Replace your_claude_api_key_here with your actual key from Part 1
 5. Save the file
 
 **Test it locally (optional):**
