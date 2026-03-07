@@ -455,13 +455,16 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
   };
 
   useEffect(() => {
-    // rAF ensures the messages container is in the DOM before we scroll
-    // (critical on first message when the container just mounted)
-    requestAnimationFrame(() => {
+    const scroll = () => {
       if (messagesScrollRef.current) {
         messagesScrollRef.current.scrollTop = messagesScrollRef.current.scrollHeight;
       }
-    });
+    };
+    // First pass: after React paints the new DOM
+    requestAnimationFrame(scroll);
+    // Second pass: after mobile keyboard animation finishes (~350ms)
+    const t = setTimeout(scroll, 380);
+    return () => clearTimeout(t);
   }, [chatMessages]);
 
   const filtered = useMemo(() => RESTAURANTS.filter(r => {
@@ -549,11 +552,9 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
           </div>
 
           {chatMessages.length === 0 ? (
-            /* ── Landing: pills above input, both anchored to bottom like iOS ── */
+            /* ── Landing: pills + input near top, just below the title bar ── */
             <div className="flex-1 flex flex-col">
-              {/* Spacer pushes content to bottom */}
-              <div className="flex-1" />
-              <div className="max-w-2xl mx-auto w-full px-6 pb-4">
+              <div className="max-w-2xl mx-auto w-full px-6 pt-8">
                 <div className="flex flex-wrap gap-2 justify-center mb-4">
                   {[
                     ["First date", "Looking for a first date spot"],
