@@ -281,68 +281,143 @@ function Card({ r, activeTags, onTagClick }) {
   );
 }
 
-function Sidebar({ activeTags, onTagToggle, onClear, priceFilter, onPriceToggle, creatorFilter, onCreatorToggle }) {
+function FilterBar({ activeTags, onTagToggle, onClear, priceFilter, onPriceToggle, creatorFilter, onCreatorToggle }) {
+  const [open, setOpen] = useState(null);
+  const barRef = useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (barRef.current && !barRef.current.contains(e.target)) setOpen(null);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const toggle = (key) => setOpen(prev => prev === key ? null : key);
+  const hasAnyFilter = activeTags.length > 0 || priceFilter.length > 0 || creatorFilter.length > 0;
+
+  const filters = [
+    { key: "price", label: "Price", count: priceFilter.length },
+    { key: "creator", label: "Creator", count: creatorFilter.length },
+    ...Object.entries(TAG_CATEGORIES).map(([catKey, cat]) => ({
+      key: catKey,
+      label: cat.label,
+      count: activeTags.filter(t => t.category === catKey).length,
+    })),
+  ];
+
   return (
-    <aside className="w-52 shrink-0 sticky top-12 h-[calc(100vh-3rem)] overflow-y-auto py-7 pr-3">
-      <div className="flex items-center justify-between mb-5">
-        <span className="text-[10px] font-semibold tracking-[0.12em] uppercase text-neutral-400">Filters</span>
-        {(activeTags.length > 0 || creatorFilter.length > 0) && <button onClick={onClear} className="text-[10px] text-neutral-400 hover:text-neutral-800 transition-colors tracking-wide">Clear all</button>}
-      </div>
-      <div className="space-y-5">
-        {/* Price */}
-        <div>
-          <p className="text-[10px] font-semibold tracking-[0.1em] uppercase text-neutral-300 mb-2">Price</p>
-          <div className="flex flex-wrap gap-1.5">
-            {[1,2,3,4].map(p => (
-              <button key={p} onClick={() => onPriceToggle(p)}
-                className={`px-2.5 py-1 rounded-full text-[11px] font-mono font-medium border transition-all duration-150
-                  ${priceFilter.includes(p) ? "bg-neutral-900 text-white border-neutral-900" : "bg-white text-neutral-500 border-neutral-200 hover:border-neutral-400 hover:text-neutral-800"}`}>
-                {PRICE_LABELS[p]}
-              </button>
-            ))}
-          </div>
-        </div>
-        {/* Creator */}
-        <div>
-          <p className="text-[10px] font-semibold tracking-[0.1em] uppercase text-neutral-300 mb-2">Creator</p>
-          <div className="flex flex-col gap-1.5">
-            {Object.values(CREATORS).map(c => {
-              const active = creatorFilter.includes(c.id);
-              return (
-                <button key={c.id} onClick={() => onCreatorToggle(c.id)}
-                  className={`flex items-center justify-between px-2.5 py-2 rounded-xl text-left border transition-all duration-150 w-full
-                    ${active ? "bg-neutral-900 border-neutral-900" : "bg-white border-neutral-200 hover:border-neutral-400"}`}>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <p className={`text-[11px] font-semibold leading-none ${active ? "text-white" : "text-neutral-700"}`}>{c.fullName}</p>
-                      <div className="flex items-center gap-0.5">
-                        {c.platforms.map(p => (
-                          <span key={p} className={`flex items-center justify-center w-3.5 h-3.5 rounded-full ${active ? "bg-neutral-700" : "bg-neutral-100"}`}>
-                            {PLATFORM_ICON[p]}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                  <p className={`text-[10px] mt-0.5 ${active ? "text-neutral-300" : "text-neutral-400"}`}>@{c.primaryHandle}</p>
+    <div className="bg-white border-b border-neutral-100" ref={barRef}>
+      <div className="max-w-[1100px] mx-auto px-8 py-3">
+        <div className="flex items-center gap-2 overflow-x-auto" style={{ scrollbarWidth: "none" }}>
+          {filters.map(f => {
+            const isActive = f.count > 0;
+            const isOpen = open === f.key;
+            return (
+              <div key={f.key} className="relative shrink-0">
+                <button
+                  onClick={() => toggle(f.key)}
+                  className={`flex items-center gap-1.5 px-3.5 py-[7px] rounded-full text-[12px] font-medium border transition-all duration-150 whitespace-nowrap
+                    ${isActive
+                      ? "bg-neutral-900 text-white border-neutral-900"
+                      : isOpen
+                      ? "bg-neutral-50 text-neutral-900 border-neutral-400"
+                      : "bg-white text-neutral-700 border-neutral-300 hover:border-neutral-500 hover:bg-neutral-50"}`}
+                >
+                  {f.label}
+                  {isActive && (
+                    <span className="inline-flex items-center justify-center w-4 h-4 rounded-full text-[10px] font-semibold bg-white/20 text-white">
+                      {f.count}
+                    </span>
+                  )}
+                  <svg
+                    className={`w-3 h-3 transition-transform duration-150 ${isOpen ? "rotate-180" : ""} ${isActive ? "text-white/70" : "text-neutral-400"}`}
+                    viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2"
+                  >
+                    <path d="M2 4l4 4 4-4" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
                 </button>
-              );
-            })}
-          </div>
+
+                {isOpen && (
+                  <div className="absolute top-full mt-2 left-0 z-30 bg-white rounded-2xl shadow-[0_8px_30px_rgba(0,0,0,0.12)] border border-neutral-100 p-4">
+                    {f.key === "price" && (
+                      <div>
+                        <p className="text-[10px] font-semibold tracking-[0.1em] uppercase text-neutral-400 mb-3">Price Range</p>
+                        <div className="flex gap-2">
+                          {[1,2,3,4].map(p => (
+                            <button key={p} onClick={() => onPriceToggle(p)}
+                              className={`px-3 py-1.5 rounded-full text-[12px] font-mono font-medium border transition-all duration-150
+                                ${priceFilter.includes(p) ? "bg-neutral-900 text-white border-neutral-900" : "bg-white text-neutral-600 border-neutral-200 hover:border-neutral-400"}`}>
+                              {PRICE_LABELS[p]}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {f.key === "creator" && (
+                      <div className="min-w-[240px]">
+                        <p className="text-[10px] font-semibold tracking-[0.1em] uppercase text-neutral-400 mb-3">Featured Creators</p>
+                        <div className="flex flex-col gap-2">
+                          {Object.values(CREATORS).map(c => {
+                            const active = creatorFilter.includes(c.id);
+                            return (
+                              <button key={c.id} onClick={() => onCreatorToggle(c.id)}
+                                className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-left border transition-all duration-150 w-full
+                                  ${active ? "bg-neutral-900 border-neutral-900" : "bg-white border-neutral-200 hover:border-neutral-400"}`}>
+                                <div>
+                                  <div className="flex items-center gap-1.5">
+                                    <p className={`text-[12px] font-semibold leading-none ${active ? "text-white" : "text-neutral-700"}`}>{c.fullName}</p>
+                                    <div className="flex items-center gap-0.5">
+                                      {c.platforms.map(p => (
+                                        <span key={p} className={`flex items-center justify-center w-3.5 h-3.5 rounded-full ${active ? "bg-neutral-700" : "bg-neutral-100"}`}>
+                                          {PLATFORM_ICON[p]}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                  <p className={`text-[10px] mt-0.5 ${active ? "text-neutral-300" : "text-neutral-400"}`}>@{c.primaryHandle}</p>
+                                </div>
+                                {active && (
+                                  <svg className="w-4 h-4 text-white shrink-0 ml-3" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 16 16">
+                                    <path d="M3 8l4 4 6-7" strokeLinecap="round" strokeLinejoin="round"/>
+                                  </svg>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {TAG_CATEGORIES[f.key] && (
+                      <div className="min-w-[240px] max-w-[300px]">
+                        <p className="text-[10px] font-semibold tracking-[0.1em] uppercase text-neutral-400 mb-3">{TAG_CATEGORIES[f.key].label}</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {Object.entries(TAG_CATEGORIES[f.key].tags).map(([tagKey]) => {
+                            const isActiveTag = activeTags.some(a => a.tag === tagKey && a.category === f.key);
+                            return <TagChip key={tagKey} tag={tagKey} category={f.key} active={isActiveTag} onClick={onTagToggle} />;
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {hasAnyFilter && (
+            <button
+              onClick={onClear}
+              className="shrink-0 text-[12px] text-neutral-500 hover:text-neutral-900 transition-colors ml-1 underline underline-offset-2 whitespace-nowrap"
+            >
+              Clear all
+            </button>
+          )}
         </div>
-        {Object.entries(TAG_CATEGORIES).map(([catKey, cat]) => (
-          <div key={catKey}>
-            <p className="text-[10px] font-semibold tracking-[0.1em] uppercase text-neutral-300 mb-2">{cat.label}</p>
-            <div className="flex flex-wrap gap-1.5">
-              {Object.entries(cat.tags).map(([tagKey]) => {
-                const isActive = activeTags.some(a => a.tag === tagKey && a.category === catKey);
-                return <TagChip key={tagKey} tag={tagKey} category={catKey} active={isActive} onClick={onTagToggle} />;
-              })}
-            </div>
-          </div>
-        ))}
       </div>
-    </aside>
+    </div>
   );
 }
 
@@ -702,11 +777,39 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
             </div>
           </div>
 
-          {/* Active filter bar */}
-          {activeTags.length > 0 && (
-            <div className="bg-white border-b border-neutral-100">
+          {/* Filter Bar */}
+          <FilterBar
+            activeTags={activeTags}
+            onTagToggle={handleTagToggle}
+            onClear={() => { setActiveTags([]); setPriceFilter([]); setCreatorFilter([]); }}
+            priceFilter={priceFilter}
+            onPriceToggle={p => setPriceFilter(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p])}
+            creatorFilter={creatorFilter}
+            onCreatorToggle={id => setCreatorFilter(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])}
+          />
+
+          {/* Active filter chips */}
+          {(activeTags.length > 0 || priceFilter.length > 0 || creatorFilter.length > 0) && (
+            <div className="bg-[#FAF8F5] border-b border-neutral-100">
               <div className="max-w-[1100px] mx-auto px-8 py-2 flex items-center gap-2 flex-wrap">
-                <span className="text-[10px] text-neutral-400 tracking-wider uppercase">Active</span>
+                <span className="text-[10px] text-neutral-400 tracking-wider uppercase shrink-0">Active</span>
+                {priceFilter.map(p => (
+                  <button key={p} onClick={() => setPriceFilter(prev => prev.filter(x => x !== p))}
+                    className="inline-flex items-center gap-1 px-2.5 py-[3px] rounded-full text-[11px] font-medium border bg-neutral-900 text-white border-neutral-900">
+                    {PRICE_LABELS[p]}
+                    <span className="text-white/60 hover:text-white ml-0.5">×</span>
+                  </button>
+                ))}
+                {creatorFilter.map(id => {
+                  const c = CREATORS[id];
+                  return c ? (
+                    <button key={id} onClick={() => setCreatorFilter(prev => prev.filter(x => x !== id))}
+                      className="inline-flex items-center gap-1 px-2.5 py-[3px] rounded-full text-[11px] font-medium border bg-neutral-900 text-white border-neutral-900">
+                      {c.fullName}
+                      <span className="text-white/60 hover:text-white ml-0.5">×</span>
+                    </button>
+                  ) : null;
+                })}
                 {activeTags.map(({ tag, category }) => (
                   <TagChip key={`${category}-${tag}`} tag={tag} category={category} active onRemove={handleTagToggle} />
                 ))}
@@ -714,24 +817,20 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
             </div>
           )}
 
-          {/* Layout */}
-          <div className="max-w-[1100px] mx-auto px-8 flex gap-8 pt-6 pb-16">
-            <Sidebar activeTags={activeTags} onTagToggle={handleTagToggle} onClear={() => { setActiveTags([]); setCreatorFilter([]); }} priceFilter={priceFilter} onPriceToggle={p => setPriceFilter(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p])} creatorFilter={creatorFilter} onCreatorToggle={id => setCreatorFilter(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])} />
-
-            <main className="flex-1 min-w-0">
-              <p className="text-[11px] text-neutral-400 mb-5 tracking-wider uppercase">
-                {filtered.length === RESTAURANTS.length ? `${RESTAURANTS.length} restaurants` : `${filtered.length} of ${RESTAURANTS.length}`}
-              </p>
-              {filtered.length === 0 ? (
-                <div className="text-center py-24">
-                  <p className="text-[14px] text-neutral-400">No matches — try removing a filter.</p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 xl:grid-cols-2 gap-3.5">
-                  {filtered.map(r => <Card key={r.id} r={r} activeTags={activeTags} onTagClick={handleTagToggle} />)}
-                </div>
-              )}
-            </main>
+          {/* Content */}
+          <div className="max-w-[1100px] mx-auto px-8 pt-6 pb-16">
+            <p className="text-[11px] text-neutral-400 mb-5 tracking-wider uppercase">
+              {filtered.length === RESTAURANTS.length ? `${RESTAURANTS.length} restaurants` : `${filtered.length} of ${RESTAURANTS.length}`}
+            </p>
+            {filtered.length === 0 ? (
+              <div className="text-center py-24">
+                <p className="text-[14px] text-neutral-400">No matches — try removing a filter.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5">
+                {filtered.map(r => <Card key={r.id} r={r} activeTags={activeTags} onTagClick={handleTagToggle} />)}
+              </div>
+            )}
           </div>
         </>
       )}
