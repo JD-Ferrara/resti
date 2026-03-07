@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from "react";
+import { supabase } from "./supabase";
 
 // Creator registry — single source of truth
 const CREATORS = {
@@ -38,34 +39,6 @@ const CREATOR_VOICES = {
   ],
 };
 
-const RESTAURANTS = [
-  { id: 1, name: "Queensyard", cuisine: "Contemporary American", price: 4, address: "Level 4, 20 Hudson Yards", website: "https://www.queensyardnyc.com", instagram: "https://www.instagram.com/queensyardnyc/", reservation: "https://resy.com/cities/new-york-ny/venues/queensyard", sources: [{ label: "The Infatuation", url: "https://www.theinfatuation.com/new-york/reviews/queensyard" }, { label: "OpenTable", url: "https://www.opentable.com/r/queensyard-new-york" }], tags: { occasion: ["romantic_milestone","saturday_night_out","birthday_dinner","anniversary"], vibe: ["buzzy_lively","grand_impressive","trendy_scene"], drinks: ["craft_cocktails","extensive_wine_list"], food: ["sharing_plates","chef_driven"], group: ["large_group","couples_only_vibe"], value: ["worth_the_splurge"], dietary: [] }, notes: "Stunning Vessel views, London-style American. Creative cocktails. Best for when you want to impress." },
-  { id: 2, name: "Zou Zou's", cuisine: "Eastern Mediterranean", price: 3, address: "385 9th Ave, Manhattan West", website: "https://www.zouzousnyc.com", instagram: "https://www.instagram.com/zouzousnyc/", reservation: "https://www.opentable.com/r/zou-zous-new-york", sources: [{ label: "The Infatuation", url: "https://www.theinfatuation.com/new-york/reviews/zou-zous" }, { label: "OpenTable", url: "https://www.opentable.com/r/zou-zous-new-york" }], tags: { occasion: ["after_work_drinks","saturday_night_out","birthday_dinner"], vibe: ["buzzy_lively","trendy_scene","grand_impressive"], drinks: ["craft_cocktails","destination_bar"], food: ["sharing_plates","chef_driven"], group: ["large_group"], value: ["worth_the_splurge"], dietary: ["vegetarian_friendly"] }, notes: "Perpetually packed after-work crowd. Moodily lit, great sharing plates. Chez Zou upstairs for cocktails." },
-  { id: 3, name: "Estiatorio Milos", cuisine: "Greek Seafood", price: 4, address: "Level 5, 20 Hudson Yards", website: "https://www.estiatoriomilos.com/location/nyhudsonyards/", instagram: "https://www.instagram.com/estiatoriomilos/", reservation: "https://resy.com/cities/new-york-ny/venues/estiatorio-milos-hudson-yards", sources: [{ label: "The Infatuation", url: "https://www.theinfatuation.com/new-york/reviews/estiatorio-milos-hudson-yards" }, { label: "OpenTable", url: "https://www.opentable.com/r/estiatorio-milos-hudson-yards-new-york" }], tags: { occasion: ["romantic_milestone","anniversary","business_dinner"], vibe: ["grand_impressive","intimate_quiet","old_school_classic"], drinks: ["extensive_wine_list"], food: ["traditional_entrees","chef_driven"], group: ["couples_only_vibe"], value: ["corporate_card_only"], dietary: ["gluten_free_friendly"] }, notes: "World-renowned Greek seafood. One of the clearest engagement/anniversary choices in the neighborhood. Outdoor terrace overlooking the Yards." },
-  { id: 4, name: "Peak with Priceless", cuisine: "American", price: 4, address: "101st Floor, 30 Hudson Yards", website: "https://www.peaknyc.com", instagram: "https://www.instagram.com/peakhudsonyards/", reservation: "https://www.opentable.com/r/peak-restaurant-and-bar-new-york", sources: [{ label: "OpenTable", url: "https://www.opentable.com/r/peak-restaurant-and-bar-new-york" }], tags: { occasion: ["birthday_dinner","saturday_night_out","first_date","romantic_milestone"], vibe: ["grand_impressive","buzzy_lively","trendy_scene"], drinks: ["craft_cocktails","extensive_wine_list"], food: ["traditional_entrees","sharing_plates"], group: ["large_group","couples_only_vibe"], value: ["worth_the_splurge"], dietary: [] }, notes: "101st floor, one above Edge. Free Edge admission with $60 spend. Views are the main event — the food plays second fiddle." },
-  { id: 5, name: "Greywind / Spygold", cuisine: "Contemporary American", price: 3, address: "451 10th Avenue", website: "https://www.greywindnyc.com", instagram: "https://www.instagram.com/greywind_nyc/", reservation: "https://resy.com/cities/new-york-ny/venues/greywind", sources: [{ label: "The Infatuation", url: "https://www.theinfatuation.com/new-york/reviews/greywind" }, { label: "Resy", url: "https://blog.resy.com/2023/04/greywind/" }], tags: { occasion: ["first_date","saturday_night_out","after_work_drinks"], vibe: ["cozy","intimate_quiet","hidden_gem","unpretentious"], drinks: ["craft_cocktails","destination_bar"], food: ["sharing_plates","chef_driven"], group: ["couples_only_vibe","solo_friendly"], value: ["worth_the_splurge","happy_hour_deal"], dietary: ["vegetarian_friendly"] }, notes: "Dan Kluger's gem. Greywind upstairs, Spygold cocktail bar below. Most neighborhood-feeling spot here. NY Mag best burgers list." },
-  { id: 6, name: "Electric Lemon", cuisine: "New American", price: 3, address: "24th Floor, Equinox Hotel, 31 Hudson Yards", website: "https://electriclemonnyc.com", instagram: "https://www.instagram.com/electriclemonnyc/", reservation: "https://resy.com/cities/new-york-ny/venues/electric-lemon", sources: [{ label: "The Infatuation", url: "https://www.theinfatuation.com/new-york/reviews/electric-lemon" }], tags: { occasion: ["saturday_night_out","first_date","after_work_drinks"], vibe: ["trendy_scene","buzzy_lively"], drinks: ["craft_cocktails","destination_bar"], food: ["sharing_plates"], group: ["couples_only_vibe","large_group"], value: ["worth_the_splurge"], dietary: ["vegetarian_friendly","gluten_free_friendly"] }, notes: "Seasonal American on the 24th floor of the Equinox Hotel. Rooftop terrace with fire pits. Health-conscious but not boring about it." },
-  { id: 7, name: "BondST", cuisine: "Japanese / Asian-American", price: 3, address: "Level 5, 20 Hudson Yards", website: "https://www.bondstrestaurant.com", instagram: "https://www.instagram.com/bondst.hudsonyards/", reservation: "https://www.opentable.com/r/bondst-hudson-yards-new-york", sources: [{ label: "OpenTable", url: "https://www.opentable.com/r/bondst-hudson-yards-new-york" }], tags: { occasion: ["business_dinner","first_date","anniversary","saturday_night_out"], vibe: ["intimate_quiet","trendy_scene"], drinks: ["craft_cocktails","extensive_wine_list"], food: ["sharing_plates","traditional_entrees"], group: ["couples_only_vibe","large_group"], value: ["worth_the_splurge"], dietary: ["gluten_free_friendly"] }, notes: "Elevated Japanese with a strong cocktail program. 25-year NoHo institution, now with a Hudson Yards home. More relaxed than Katsuya but still impressive." },
-  { id: 8, name: "P.J. Clarke's", cuisine: "American Bar & Grill", price: 2, address: "4 Hudson Yards", website: "https://www.pjclarkes.com/location/hudson-yards", instagram: "https://www.instagram.com/pjclarkes/", reservation: null, sources: [{ label: "The Infatuation", url: "https://www.theinfatuation.com/new-york/reviews/pj-clarkes-hudson-yards" }], tags: { occasion: ["after_work_drinks","saturday_night_out"], vibe: ["old_school_classic","unpretentious","buzzy_lively"], drinks: ["standard_bar","great_beer_selection"], food: ["bar_snacks_only","traditional_entrees"], group: ["watch_games_with_friends","large_group","solo_friendly"], value: ["great_value"], dietary: [] }, notes: "About 50% bar — and it knows it. Best burger in the neighborhood. After-work crowd owns this place 5–7pm weekdays." },
-  { id: 10, name: "Mercado Little Spain", cuisine: "Spanish Market / Hall", price: 2, address: "10 Hudson Yards", website: "https://www.littlespain.com", instagram: "https://www.instagram.com/mercadolittlespain/", reservation: null, sources: [{ label: "The Infatuation", url: "https://www.theinfatuation.com/new-york/reviews/mercado-little-spain" }, { label: "NY Times", url: "https://www.nytimes.com/2019/03/14/dining/mercado-little-spain-review.html" }], tags: { occasion: ["saturday_night_out","sunday_brunch","birthday_dinner"], vibe: ["buzzy_lively","unpretentious"], drinks: ["standard_bar","natural_wine"], food: ["sharing_plates","bar_snacks_only"], group: ["large_group","family_friendly"], value: ["great_value"], dietary: ["vegetarian_friendly"] }, notes: "José Andrés food hall. NY Times: more great food per square foot than anywhere in NYC. Go with a group and try everything." },
-  { id: 11, name: "La Barra", cuisine: "Spanish Tapas", price: 2, address: "Inside Mercado Little Spain, 10 Hudson Yards", website: "https://www.littlespain.com", instagram: "https://www.instagram.com/mercadolittlespain/", reservation: "https://www.opentable.com/r/la-barra-new-york", sources: [{ label: "OpenTable", url: "https://www.opentable.com/r/la-barra-new-york" }], tags: { occasion: ["after_work_drinks","saturday_night_out"], vibe: ["buzzy_lively","unpretentious"], drinks: ["standard_bar","natural_wine"], food: ["sharing_plates"], group: ["large_group"], value: ["great_value","happy_hour_deal"], dietary: ["vegetarian_friendly"] }, notes: "Best happy hour in Hudson Yards. Solid tapas, great wine by the glass, zero attitude." },
-  { id: 12, name: "Miznon", cuisine: "Israeli Street Food", price: 1, address: "10 Hudson Yards", website: "https://www.miznon.com/nyc", instagram: "https://www.instagram.com/miznon_usa/", reservation: null, sources: [{ label: "The Infatuation", url: "https://www.theinfatuation.com/new-york/reviews/miznon-hudson-yards" }, { label: "Eater NY", url: "https://ny.eater.com/venue/miznon-hudson-yards" }], tags: { occasion: ["business_lunch","sunday_brunch"], vibe: ["unpretentious","buzzy_lively"], drinks: ["standard_bar"], food: ["bar_snacks_only","sharing_plates"], group: ["solo_friendly","family_friendly"], value: ["great_value","budget_friendly"], dietary: ["vegetarian_friendly"] }, notes: "No-frills Israeli pita counter. Whole-roasted cauliflower pita is a signature. Best quick lunch in the neighborhood." },
-  { id: 14, name: "Bronx Brewery Kitchen", cuisine: "Bar / American", price: 1, address: "Level 2, Hudson Yards Shops", website: "https://www.thebronxbrewery.com/hudson-yards", instagram: "https://www.instagram.com/bronxbrewery/", reservation: null, sources: [{ label: "Hudson Yards", url: "https://www.hudsonyardsnewyork.com/food-drink/bronx-brewery" }], tags: { occasion: ["after_work_drinks","saturday_night_out"], vibe: ["unpretentious","cozy"], drinks: ["great_beer_selection","standard_bar"], food: ["bar_snacks_only"], group: ["watch_games_with_friends","large_group","solo_friendly"], value: ["great_value","budget_friendly"], dietary: [] }, notes: "Best spot in the neighborhood to catch a game. Relaxed, no pretense, solid rotating taps." },
-  { id: 15, name: "Shake Shack", cuisine: "Fast Casual American", price: 1, address: "Hudson Yards", website: "https://www.shakeshack.com/location/hudson-yards-nyc/", instagram: "https://www.instagram.com/shakeshack/", reservation: null, sources: [], tags: { occasion: ["business_lunch"], vibe: ["unpretentious"], drinks: ["standard_bar"], food: ["traditional_entrees"], group: ["solo_friendly","family_friendly"], value: ["great_value","budget_friendly"], dietary: [] }, notes: "It's Shake Shack. Reliable, fast, no surprises." },
-  { id: 16, name: "Limusina", cuisine: "Upscale Mexican", price: 3, address: "441 9th Avenue", website: "https://www.limusina.com", instagram: "https://www.instagram.com/limusinanyc/", reservation: "https://resy.com/cities/new-york-ny/venues/limusina", sources: [{ label: "The Infatuation", url: "https://www.theinfatuation.com/new-york/reviews/limusina" }, { label: "Eater NY", url: "https://ny.eater.com/venue/limusina-nyc" }, { label: "Robb Report", url: "https://robbreport.com/food-drink/dining/limusina-quality-branded-mexican-restaurant-nyc-1237037953/" }], tags: { occasion: ["saturday_night_out","birthday_dinner","first_date","after_work_drinks"], vibe: ["trendy_scene","buzzy_lively","grand_impressive"], drinks: ["craft_cocktails","destination_bar"], food: ["sharing_plates","chef_driven"], group: ["large_group","couples_only_vibe"], value: ["worth_the_splurge"], dietary: ["vegetarian_friendly"] }, notes: "Newest Quality Branded hotspot (Don Angie, Zou Zou's). 3-level former parking garage. Great drinks and snacks." },
-  { id: 17, name: "Kyma", cuisine: "Greek / Mediterranean Seafood", price: 3, address: "445 W 35th Street", website: "https://kymarestaurants.com/nyc", instagram: "https://www.instagram.com/kymahudsonyards/", reservation: "https://www.opentable.com/r/kyma-hudson-yards-new-york", sources: [{ label: "OpenTable", url: "https://www.opentable.com/r/kyma-hudson-yards-new-york" }], tags: { occasion: ["saturday_night_out","anniversary","business_dinner","birthday_dinner"], vibe: ["buzzy_lively","grand_impressive","trendy_scene"], drinks: ["craft_cocktails","extensive_wine_list"], food: ["traditional_entrees","sharing_plates","chef_driven"], group: ["large_group","couples_only_vibe"], value: ["worth_the_splurge"], dietary: ["gluten_free_friendly"] }, notes: "Whitewashed Mykonos interior. DJ Fridays & Saturdays from 8pm — vibe shifts significantly. Fish flown daily from the Mediterranean." },
-  { id: 18, name: "NIZUC", cuisine: "Contemporary Coastal Mexican", price: 3, address: "Hudson Yards", website: "https://www.nizucrestaurant.com", instagram: "https://www.instagram.com/nizucnyc/", reservation: "https://www.opentable.com/r/nizuc-new-york", sources: [{ label: "OpenTable", url: "https://www.opentable.com/r/nizuc-new-york" }], tags: { occasion: ["saturday_night_out","first_date","after_work_drinks"], vibe: ["buzzy_lively","trendy_scene"], drinks: ["craft_cocktails"], food: ["sharing_plates","traditional_entrees"], group: ["large_group","couples_only_vibe"], value: ["worth_the_splurge"], dietary: ["vegetarian_friendly"] }, notes: "Coastal Mexican with Latin flair. Vibrant atmosphere, quality-ingredient focused." },
-  { id: 19, name: "Russ & Daughters", cuisine: "Jewish Deli / Appetizing", price: 2, address: "50 Hudson Yards", website: "https://www.russanddaughters.com/cafe", instagram: "https://www.instagram.com/russanddaughters/", reservation: "https://resy.com/cities/new-york-ny/venues/russ-and-daughters-hudson-yards", sources: [{ label: "Eater NY", url: "https://ny.eater.com/venue/russ-and-daughters-hudson-yards" }], tags: { occasion: ["sunday_brunch","business_lunch"], vibe: ["old_school_classic","unpretentious","hidden_gem"], drinks: ["destination_bar"], food: ["traditional_entrees"], group: ["solo_friendly","family_friendly","couples_only_vibe"], value: ["great_value","worth_the_splurge"], dietary: ["gluten_free_friendly"] }, notes: "110-year-old LES icon. Smoked fish, bagels, bialys, babka. Caviar & champagne bar opening soon." },
-  { id: 20, name: "Oyamel", cuisine: "Mexican", price: 2, address: "10 Hudson Yards", website: "https://www.oyamel.com/hudson-yards", instagram: "https://www.instagram.com/oyamelnyc/", reservation: "https://www.opentable.com/r/oyamel-new-york", sources: [{ label: "The Infatuation", url: "https://www.theinfatuation.com/new-york/reviews/oyamel-hudson-yards" }], tags: { occasion: ["after_work_drinks","saturday_night_out","sunday_brunch"], vibe: ["buzzy_lively","unpretentious"], drinks: ["craft_cocktails"], food: ["sharing_plates"], group: ["large_group","family_friendly"], value: ["great_value"], dietary: ["vegetarian_friendly"] }, notes: "José Andrés' Mexican concept. Lighter and more casual than Limusina. Good margaritas and antojitos post-work." },
-  { id: 21, name: "ANA Bar and Eatery", cuisine: "All-Day Café / American", price: 2, address: "15 Hudson Yards", website: "https://www.15hudsonyards.com/dining/ana", instagram: "https://www.instagram.com/anabarandeatery/", reservation: null, sources: [], tags: { occasion: ["sunday_brunch","business_lunch"], vibe: ["cozy","unpretentious"], drinks: ["standard_bar"], food: ["traditional_entrees","bar_snacks_only"], group: ["solo_friendly","family_friendly"], value: ["great_value"], dietary: [] }, notes: "All-day café inside 15 Hudson Yards. Good pit stop before or after The Shed." },
-  { id: 22, name: "Eataly", cuisine: "Italian Market / Café", price: 2, address: "Hudson Yards", website: "https://www.eataly.com/us_en/stores/nyc-hudson-yards/", instagram: "https://www.instagram.com/eataly/", reservation: null, sources: [{ label: "Eater NY", url: "https://ny.eater.com/venue/eataly-hudson-yards" }], tags: { occasion: ["sunday_brunch","business_lunch"], vibe: ["buzzy_lively","unpretentious"], drinks: ["standard_bar","natural_wine"], food: ["traditional_entrees","sharing_plates"], group: ["solo_friendly","family_friendly","large_group"], value: ["great_value"], dietary: ["vegetarian_friendly"] }, notes: "Fourth NYC Eataly, opened spring 2025. Italian marketplace with pasta, pizza, coffee, and wine." },
-  { id: 23, name: "Fuku", cuisine: "Fast Casual / Fried Chicken", price: 1, address: "Hudson Yards", website: "https://www.fuku.com", instagram: "https://www.instagram.com/eatfuku/", reservation: null, sources: [], tags: { occasion: ["business_lunch"], vibe: ["unpretentious"], drinks: ["standard_bar"], food: ["traditional_entrees"], group: ["solo_friendly","family_friendly"], value: ["budget_friendly","great_value"], dietary: [] }, notes: "David Chang's fried chicken concept. Spicy chicken sandwich is the move." },
-  { id: 24, name: "Ci Siamo", cuisine: "Italian / Live-Fire", price: 3, address: "440 W 33rd St, Manhattan West", website: "https://www.cisiamo.com", instagram: "https://www.instagram.com/cisiamonyc/", reservation: "https://www.sevenrooms.com/reservations/cisiamo/web", sources: [{ label: "Michelin", url: "https://guide.michelin.com/us/en/new-york-state/new-york/restaurant/ci-siamo" }, { label: "The Infatuation", url: "https://www.theinfatuation.com/new-york/reviews/ci-siamo" }, { label: "Eater NY", url: "https://ny.eater.com/venue/ci-siamo-nyc" }], tags: { occasion: ["romantic_milestone","saturday_night_out","anniversary","business_dinner","first_date"], vibe: ["grand_impressive","intimate_quiet","unpretentious"], drinks: ["craft_cocktails","extensive_wine_list","natural_wine"], food: ["sharing_plates","chef_driven","traditional_entrees"], group: ["couples_only_vibe","large_group"], value: ["worth_the_splurge"], dietary: ["vegetarian_friendly","gluten_free_friendly"] }, notes: "Danny Meyer / USHG live-fire Italian in Manhattan West. Michelin recognized. Chef Hillary Sterling. Caramelized onion torta alone is worth the trip." },
-  { id: 25, name: "Papa San", cuisine: "Peruvian-Japanese / Nikkei Izakaya", price: 3, address: "501 W 34th Street (The Spiral)", website: "https://www.papasannyc.com", instagram: "https://www.instagram.com/papasannyc/", reservation: "https://resy.com/cities/new-york-ny/venues/papa-san", sources: [{ label: "The Infatuation", url: "https://www.theinfatuation.com/new-york/reviews/papa-san" }, { label: "Michelin", url: "https://guide.michelin.com/us/en/new-york-state/new-york/restaurant/papa-san" }, { label: "Resy", url: "https://blog.resy.com/2025/02/papa-san-nyc/" }], tags: { occasion: ["saturday_night_out","first_date","birthday_dinner","after_work_drinks"], vibe: ["buzzy_lively","trendy_scene","hidden_gem"], drinks: ["craft_cocktails","destination_bar","extensive_wine_list"], food: ["sharing_plates","chef_driven"], group: ["large_group","couples_only_vibe","solo_friendly"], value: ["worth_the_splurge"], dietary: ["gluten_free_friendly"] }, notes: "Opened Feb 2025. Nikkei izakaya: ceviches, robatayaki, eel pizza. Bar by Tres Monos (#7 World's 50 Best Bars). 60+ sakes." },
-  { id: 26, name: "Locanda Verde", cuisine: "Italian Osteria", price: 3, address: "50 Hudson Yards", website: "https://www.locandaverdenyc.com/location/hudson-yards/", instagram: "https://www.instagram.com/locandaverde/", reservation: "https://resy.com/cities/new-york-ny/venues/locanda-verde-hudson-yards", sources: [{ label: "The Infatuation", url: "https://www.theinfatuation.com/new-york/reviews/locanda-verde-hudson-yards" }, { label: "OpenTable", url: "https://www.opentable.com/r/locanda-verde-hudson-yards-new-york" }], tags: { occasion: ["romantic_milestone","saturday_night_out","anniversary","business_dinner","sunday_brunch","business_lunch"], vibe: ["grand_impressive","cozy","old_school_classic"], drinks: ["craft_cocktails","extensive_wine_list"], food: ["traditional_entrees","chef_driven","sharing_plates"], group: ["couples_only_vibe","large_group"], value: ["worth_the_splurge"], dietary: ["vegetarian_friendly"] }, notes: "Andrew Carmellini's beloved Tribeca osteria, second location opened 2024. Open breakfast through dinner. Request balcony for intimate seating." },
-  { id: 27, name: "Saverne", cuisine: "French Brasserie / Alsatian", price: 3, address: "531 W 34th St (The Spiral)", website: "https://www.savernenyc.com", instagram: "https://www.instagram.com/gabrielkreuther/", reservation: "https://resy.com/cities/new-york-ny/venues/saverne", sources: [{ label: "Resy", url: "https://blog.resy.com/2026/03/gabriel-kreuther-saverne/" }, { label: "WWD", url: "https://wwd.com/eye/lifestyle/inside-saverne-gabriel-kreuther-restaurant-1238640964/" }], tags: { occasion: ["saturday_night_out","first_date","business_dinner","romantic_milestone"], vibe: ["grand_impressive","cozy","unpretentious"], drinks: ["craft_cocktails","extensive_wine_list","great_beer_selection"], food: ["sharing_plates","chef_driven","traditional_entrees"], group: ["couples_only_vibe","large_group","solo_friendly"], value: ["worth_the_splurge"], dietary: ["gluten_free_friendly"] }, notes: "Opened March 2, 2026. Gabriel Kreuther (2 Michelin stars) goes casual. Wood-fired Alsatian brasserie at The Spiral. Tarte flambée, 12-seat chef's counter. Early buzz is exceptional.", isNew: true },
-  { id: 28, name: "Jajaja Mexicana", cuisine: "Plant-Based Mexican", price: 2, address: "450 W 33rd St (Manhattan West)", website: "https://www.jajajamexicana.com", instagram: "https://www.instagram.com/jajajaplants/", reservation: null, sources: [{ label: "Jajaja", url: "https://www.jajajamexicana.com/hudson-yards-ny-ny" }], tags: { occasion: ["business_lunch","saturday_night_out","sunday_brunch","after_work_drinks"], vibe: ["buzzy_lively","unpretentious"], drinks: ["craft_cocktails"], food: ["sharing_plates"], group: ["solo_friendly","family_friendly","large_group"], value: ["great_value"], dietary: ["vegan","vegetarian_friendly","gluten_free_friendly"] }, notes: "100% plant-based Mexican — the entire menu is vegan by design. House-made tortillas, coco queso, seitan chorizo." },
-];
 
 const TAG_CATEGORIES = {
   occasion: { label: "Occasion", tags: { romantic_milestone: "Romantic Milestone", saturday_night_out: "Saturday Night Out", birthday_dinner: "Birthday Dinner", business_dinner: "Business Dinner", business_lunch: "Business Lunch", first_date: "First Date", anniversary: "Anniversary", after_work_drinks: "After Work", sunday_brunch: "Sunday Brunch" } },
@@ -80,29 +53,6 @@ const TAG_CATEGORIES = {
 const PRICE_LABELS = { 1: "$", 2: "$$", 3: "$$$", 4: "$$$$" };
 const CAT_ACCENT = { occasion: "#D4163C", vibe: "#6D28D9", drinks: "#0369A1", food: "#B45309", group: "#047857", dietary: "#065F46", value: "#1E40AF" };
 
-// Concierge system prompt — built from live restaurant data so it's always in sync
-const RESTAURANT_CONTEXT = RESTAURANTS.map(r =>
-  `${r.name} (${r.cuisine}, ${PRICE_LABELS[r.price]}, ${r.address}): ${r.notes}`
-).join("\n");
-
-const CONCIERGE_SYSTEM = `You are a trusted friend who knows every restaurant in the Hudson Yards area of NYC better than anyone. You're warm, direct, and opinionated — the person in every friend group who always knows exactly where to go and why. You've been curating this neighborhood for friends, coworkers, dates, and family for years.
-
-Your approach before recommending anything:
-- Never assume. Always ask 2–3 natural questions to understand the full picture before giving a recommendation. You need to know: who they're with (or going solo), what the occasion or vibe is, roughly what time/day they're thinking, and any relevant preferences (budget, cuisine, dietary needs).
-- Ask these questions conversationally — not all at once like a form. Start with the most important unknown and let the conversation flow. Mix up how you phrase things. Don't start every response the same way.
-- If the person gives you enough detail upfront (occasion + party + time + vibe), you can skip straight to a recommendation. Use judgment.
-
-When you have enough context:
-- Give one clear primary recommendation and one strong backup. Be specific about why each fits their exact situation — not a generic description, but a real reason tied to what they told you.
-- Be confident and opinionated. If somewhere is the obvious right call, say it. If something doesn't fit what they described, be honest.
-- Keep responses concise and human. No bullet walls. No stiff AI-speak. Talk like a friend giving real advice over text.
-
-After recommending, stay in the conversation. If they want a different vibe, a different price point, or have follow-up questions — help them pivot. This is a dialogue, not a one-shot answer.
-
-Restaurants in this guide:
-${RESTAURANT_CONTEXT}
-
-You only know these restaurants. If asked about somewhere else, be honest about it and bring the conversation back to what's here.`;
 
 
 function TagChip({ tag, category, active, onClick, onRemove }) {
@@ -148,7 +98,7 @@ const PLATFORM_ICON = {
   ),
 };
 
-function CreatorVoices({ voices }) {
+function CreatorVoices({ voices, onTrack }) {
   return (
     <div className="mb-4 space-y-2">
       {voices.map((v, i) => {
@@ -156,6 +106,7 @@ function CreatorVoices({ voices }) {
         if (!creator) return null;
         return (
           <a key={i} href={creator.url} target="_blank" rel="noopener noreferrer"
+            onClick={() => onTrack?.("video_play")}
             className="flex items-start gap-2.5 p-2.5 rounded-xl bg-neutral-50 hover:bg-neutral-100 transition-colors no-underline group">
             <div className="shrink-0 mt-0.5 w-5 h-5 rounded-full bg-white border border-neutral-200 flex items-center justify-center">
               {PLATFORM_ICON[creator.primaryPlatform]}
@@ -174,7 +125,7 @@ function CreatorVoices({ voices }) {
   );
 }
 
-function Card({ r, activeTags, onTagClick }) {
+function Card({ r, activeTags, onTagClick, onTrack }) {
   const [tagsExpanded, setTagsExpanded] = useState(false);
   const allTags = Object.entries(r.tags).flatMap(([cat, ts]) => ts.map(t => ({ tag: t, category: cat })));
 
@@ -193,7 +144,7 @@ function Card({ r, activeTags, onTagClick }) {
         <div className="flex-1 min-w-0 pr-3">
           <div className="flex items-center gap-2 flex-wrap">
             <h3 className="text-[16px] font-semibold text-neutral-900 tracking-[-0.01em] leading-snug">{r.name}</h3>
-            {r.isNew && <span className="text-[9px] font-bold tracking-[0.08em] uppercase px-1.5 py-[3px] rounded-full bg-neutral-900 text-white leading-none">New</span>}
+            {(r.is_new || r.isNew) && <span className="text-[9px] font-bold tracking-[0.08em] uppercase px-1.5 py-[3px] rounded-full bg-neutral-900 text-white leading-none">New</span>}
           </div>
           <p className="text-[12px] text-neutral-400 mt-0.5">{r.cuisine}</p>
         </div>
@@ -210,7 +161,7 @@ function Card({ r, activeTags, onTagClick }) {
       <p className="text-[13px] text-neutral-600 leading-[1.6] mb-4">{r.notes}</p>
 
       {/* Creator voices */}
-      {voices && <CreatorVoices voices={voices} />}
+      {voices && <CreatorVoices voices={voices} onTrack={onTrack} />}
 
       {/* Tags — collapsed by default */}
       <div className="mb-4">
@@ -238,6 +189,7 @@ function Card({ r, activeTags, onTagClick }) {
         <div className="flex flex-wrap gap-x-3 gap-y-1">
           {r.sources.map(s => (
             <a key={s.label} href={s.url} target="_blank" rel="noopener noreferrer"
+              onClick={() => onTrack?.("editorial_click")}
               className="text-[11px] text-neutral-400 hover:text-neutral-700 transition-colors underline underline-offset-2 decoration-neutral-300 hover:decoration-neutral-500">
               {s.label}
             </a>
@@ -265,6 +217,7 @@ function Card({ r, activeTags, onTagClick }) {
           )}
           {r.reservation && (
             <a href={r.reservation} target="_blank" rel="noopener noreferrer" title="Reserve"
+              onClick={() => onTrack?.("reservation_click")}
               style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "30px", height: "30px", borderRadius: "50%", backgroundColor: "#e5e5e5", textDecoration: "none" }}>
               <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="#111111" strokeWidth="1.8">
                 <rect x="2.5" y="3.5" width="15" height="14" rx="2"/>
@@ -422,6 +375,51 @@ function FilterBar({ activeTags, onTagToggle, onClear, priceFilter, onPriceToggl
 }
 
 export default function App() {
+  // Restaurant data from Supabase
+  const [restaurants, setRestaurants] = useState([]);
+  const [loadingRestaurants, setLoadingRestaurants] = useState(true);
+
+  useEffect(() => {
+    supabase
+      .from("restaurants")
+      .select("*")
+      .order("id")
+      .then(({ data, error }) => {
+        if (!error && data) setRestaurants(data);
+        setLoadingRestaurants(false);
+      });
+  }, []);
+
+  // Track a click event to the events table (fire-and-forget)
+  const trackEvent = (restaurantId, eventType) => {
+    supabase.from("events").insert({ restaurant_id: restaurantId, event_type: eventType });
+  };
+
+  // Concierge system prompt — built from live Supabase data
+  const CONCIERGE_SYSTEM = useMemo(() => {
+    const context = restaurants.map(r =>
+      `${r.name} (${r.cuisine}, ${PRICE_LABELS[r.price]}, ${r.address}): ${r.notes}`
+    ).join("\n");
+    return `You are a trusted friend who knows every restaurant in the Hudson Yards area of NYC better than anyone. You're warm, direct, and opinionated — the person in every friend group who always knows exactly where to go and why. You've been curating this neighborhood for friends, coworkers, dates, and family for years.
+
+Your approach before recommending anything:
+- Never assume. Always ask 2–3 natural questions to understand the full picture before giving a recommendation. You need to know: who they're with (or going solo), what the occasion or vibe is, roughly what time/day they're thinking, and any relevant preferences (budget, cuisine, dietary needs).
+- Ask these questions conversationally — not all at once like a form. Start with the most important unknown and let the conversation flow. Mix up how you phrase things. Don't start every response the same way.
+- If the person gives you enough detail upfront (occasion + party + time + vibe), you can skip straight to a recommendation. Use judgment.
+
+When you have enough context:
+- Give one clear primary recommendation and one strong backup. Be specific about why each fits their exact situation — not a generic description, but a real reason tied to what they told you.
+- Be confident and opinionated. If somewhere is the obvious right call, say it. If something doesn't fit what they described, be honest.
+- Keep responses concise and human. No bullet walls. No stiff AI-speak. Talk like a friend giving real advice over text.
+
+After recommending, stay in the conversation. If they want a different vibe, a different price point, or have follow-up questions — help them pivot. This is a dialogue, not a one-shot answer.
+
+Restaurants in this guide:
+${context}
+
+You only know these restaurants. If asked about somewhere else, be honest about it and bring the conversation back to what's here.`;
+  }, [restaurants]);
+
   // Explore mode state
   const [activeTags, setActiveTags] = useState([]);
   const [search, setSearch] = useState("");
@@ -523,6 +521,14 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
       const data = await res.json();
       const reply = data.content?.[0]?.text || "Sorry, I couldn't get a response. Please try again.";
       setChatMessages(prev => [...prev, { role: "assistant", content: reply }]);
+
+      // Track any restaurants mentioned in the AI reply
+      const replyLower = reply.toLowerCase();
+      restaurants.forEach(r => {
+        if (replyLower.includes(r.name.toLowerCase())) {
+          trackEvent(r.id, "concierge_surface");
+        }
+      });
     } catch {
       setChatMessages(prev => [...prev, { role: "assistant", content: "Something went wrong. Please try again." }]);
     }
@@ -542,14 +548,14 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
     return () => clearTimeout(t);
   }, [chatMessages]);
 
-  const filtered = useMemo(() => RESTAURANTS.filter(r => {
+  const filtered = useMemo(() => restaurants.filter(r => {
     const q = search.toLowerCase();
     const voiceCreatorIds = (CREATOR_VOICES[r.id] || []).map(v => v.creatorId);
     return (!q || r.name.toLowerCase().includes(q) || r.cuisine.toLowerCase().includes(q) || r.notes.toLowerCase().includes(q))
       && (!priceFilter.length || priceFilter.includes(r.price))
       && (!creatorFilter.length || creatorFilter.some(id => voiceCreatorIds.includes(id)))
       && activeTags.every(({ tag, category }) => r.tags[category]?.includes(tag));
-  }), [activeTags, search, priceFilter, creatorFilter]);
+  }), [restaurants, activeTags, search, priceFilter, creatorFilter]);
 
   return (
     <div className={`bg-[#FAF8F5] ${mode === "concierge" ? "h-dvh overflow-hidden" : "min-h-screen"}`} style={{ fontFamily: "-apple-system, 'SF Pro Text', 'SF Pro Display', BlinkMacSystemFont, 'Helvetica Neue', sans-serif" }}>
@@ -820,15 +826,19 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
           {/* Content */}
           <div className="max-w-[1100px] mx-auto px-8 pt-6 pb-16">
             <p className="text-[11px] text-neutral-400 mb-5 tracking-wider uppercase">
-              {filtered.length === RESTAURANTS.length ? `${RESTAURANTS.length} restaurants` : `${filtered.length} of ${RESTAURANTS.length}`}
+              {loadingRestaurants ? "Loading…" : filtered.length === restaurants.length ? `${restaurants.length} restaurants` : `${filtered.length} of ${restaurants.length}`}
             </p>
-            {filtered.length === 0 ? (
+            {loadingRestaurants ? (
+              <div className="text-center py-24">
+                <p className="text-[14px] text-neutral-400">Loading restaurants…</p>
+              </div>
+            ) : filtered.length === 0 ? (
               <div className="text-center py-24">
                 <p className="text-[14px] text-neutral-400">No matches — try removing a filter.</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5">
-                {filtered.map(r => <Card key={r.id} r={r} activeTags={activeTags} onTagClick={handleTagToggle} />)}
+                {filtered.map(r => <Card key={r.id} r={r} activeTags={activeTags} onTagClick={handleTagToggle} onTrack={(type) => trackEvent(r.id, type)} />)}
               </div>
             )}
           </div>
