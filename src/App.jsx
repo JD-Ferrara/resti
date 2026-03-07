@@ -477,7 +477,7 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
   }), [activeTags, search, priceFilter, creatorFilter]);
 
   return (
-    <div className="min-h-screen bg-[#FAF8F5]" style={{ fontFamily: "-apple-system, 'SF Pro Text', 'SF Pro Display', BlinkMacSystemFont, 'Helvetica Neue', sans-serif" }}>
+    <div className={`bg-[#FAF8F5] ${mode === "concierge" ? "h-dvh overflow-hidden" : "min-h-screen"}`} style={{ fontFamily: "-apple-system, 'SF Pro Text', 'SF Pro Display', BlinkMacSystemFont, 'Helvetica Neue', sans-serif" }}>
 
       {/* Header */}
       <header className="sticky top-0 z-20 bg-white/90 backdrop-blur-2xl border-b border-neutral-100">
@@ -580,7 +580,7 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
                     onChange={e => setChatInput(e.target.value)}
                     onKeyDown={e => e.key === "Enter" && !e.shiftKey && handleConciergeChat()}
                     placeholder="Tell me what you're planning…"
-                    className="flex-1 px-4 py-2.5 text-[13px] bg-neutral-100 rounded-full border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-300 transition-all"
+                    className="flex-1 px-4 py-2.5 text-base sm:text-[13px] bg-neutral-100 rounded-full border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-300 transition-all"
                   />
                   <button
                     onClick={() => handleConciergeChat()}
@@ -596,7 +596,7 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
             /* ── Active Chat: messages scroll, input pinned at bottom ── */
             <>
               <div className="flex-1 overflow-y-auto" ref={messagesScrollRef}>
-                <div className="max-w-2xl mx-auto px-6 py-4 space-y-4">
+                <div className="max-w-2xl mx-auto px-6 py-4 min-h-full flex flex-col justify-end gap-4">
                   {chatMessages.map((msg, i) => (
                     <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
                       <div className={`max-w-[82%] px-4 py-2.5 rounded-2xl text-[13px] leading-relaxed whitespace-pre-wrap
@@ -632,7 +632,7 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
                     onChange={e => setChatInput(e.target.value)}
                     onKeyDown={e => e.key === "Enter" && !e.shiftKey && handleConciergeChat()}
                     placeholder="Tell me what you're planning…"
-                    className="flex-1 px-4 py-2.5 text-[13px] bg-neutral-100 rounded-full border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-300 transition-all"
+                    className="flex-1 px-4 py-2.5 text-base sm:text-[13px] bg-neutral-100 rounded-full border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-300 transition-all"
                   />
                   <button
                     onClick={() => handleConciergeChat()}
