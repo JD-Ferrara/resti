@@ -309,7 +309,7 @@ function FilterBar({ activeTags, onTagToggle, onClear, priceFilter, onPriceToggl
   return (
     <div className="bg-white border-b border-neutral-100" ref={barRef}>
       <div className="max-w-[1100px] mx-auto px-8 py-3">
-        <div className="flex items-center gap-2 overflow-x-auto" style={{ scrollbarWidth: "none" }}>
+        <div className="flex items-center gap-2 flex-wrap">
           {filters.map(f => {
             const isActive = f.count > 0;
             const isOpen = open === f.key;
