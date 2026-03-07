@@ -1,4 +1,4 @@
-# resti — Hudson Yards Restaurant Guide
+# resti — Restaurant Guide
 
 ---
 
