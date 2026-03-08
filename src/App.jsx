@@ -68,11 +68,11 @@ function CreatorVoices({ voices, onTrack }) {
         const creator = v.creator;
         if (!creator) return null;
         return (
-          <a key={i} href={creator.url} target="_blank" rel="noopener noreferrer"
+          <a key={i} href={v.url} target="_blank" rel="noopener noreferrer"
             onClick={() => onTrack?.("video_play")}
             className="flex items-start gap-2.5 p-2.5 rounded-xl bg-neutral-50 hover:bg-neutral-100 transition-colors no-underline group">
             <div className="shrink-0 mt-0.5 w-5 h-5 rounded-full bg-white border border-neutral-200 flex items-center justify-center">
-              {PLATFORM_ICON[creator.primary_platform]}
+              {PLATFORM_ICON[v.platform]}
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-[11px] text-neutral-600 leading-snug italic">"{v.quote}"</p>
@@ -370,7 +370,7 @@ export default function App() {
           const grouped = {};
           data.forEach(q => {
             if (!grouped[q.restaurant_id]) grouped[q.restaurant_id] = [];
-            grouped[q.restaurant_id].push({ creatorId: q.creator_id, quote: q.quote, creator: q.creator });
+            grouped[q.restaurant_id].push({ creatorId: q.creator_id, quote: q.quote, creator: q.creator, platform: q.platform, url: q.url });
           });
           setCreatorVoices(grouped);
         }
