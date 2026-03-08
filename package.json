@@ -7,7 +7,11 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "deploy": "npm run build && gh-pages -d dist"
+    "deploy": "npm run build && gh-pages -d dist",
+    "places:compare": "node scripts/compare-hudson-yards.js",
+    "places:compare:save": "node scripts/compare-hudson-yards.js --save",
+    "places:fetch": "node scripts/fetch-places.js",
+    "places:seed": "node scripts/seed-raw-places.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.98.0",
@@ -15,8 +19,11 @@
     "react-dom": "^18.2.0"
   },
   "devDependencies": {
+    "@turf/boolean-point-in-polygon": "^7.3.4",
+    "@turf/helpers": "^7.3.4",
     "@vitejs/plugin-react": "^4.2.1",
     "autoprefixer": "^10.4.17",
+    "dotenv": "^17.3.1",
     "gh-pages": "^6.1.1",
     "postcss": "^8.4.35",
     "tailwindcss": "^3.4.1",

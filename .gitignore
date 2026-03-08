@@ -2,3 +2,7 @@ node_modules
 dist
 .env.local
 .env
+
+# Pipeline script outputs (cached GeoJSON + comparison reports)
+scripts/cache/*.geojson
+scripts/output/*.json
