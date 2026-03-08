@@ -96,19 +96,19 @@ CREATE INDEX IF NOT EXISTS idx_restaurant_tags_tag        ON restaurant_tags(tag
 -- Run once. Safe to re-run: INSERT ... ON CONFLICT DO NOTHING.
 
 INSERT INTO restaurant_tags (restaurant_id, tag_id)
-SELECT
-  r.id            AS restaurant_id,
-  t.id            AS tag_id
-FROM
-  restaurants r,
-  -- Expand JSONB: each category key → each tag_key in its array
-  LATERAL jsonb_each(r.tags) AS cat(category, tag_keys),
-  LATERAL jsonb_array_elements_text(cat.tag_keys) AS tag_key_value
-JOIN tags t
-  ON t.category = cat.category
- AND t.tag_key  = tag_key_value
-WHERE
-  r.tags IS NOT NULL
+SELECT sub.restaurant_id, t.id
+FROM (
+  SELECT
+    r.id        AS restaurant_id,
+    cat.category,
+    kv.tag_key
+  FROM
+    restaurants r,
+    LATERAL jsonb_each(r.tags)                    AS cat(category, tag_keys),
+    LATERAL jsonb_array_elements_text(cat.tag_keys) AS kv(tag_key)
+  WHERE r.tags IS NOT NULL
+) sub
+JOIN tags t ON t.category = sub.category AND t.tag_key = sub.tag_key
 ON CONFLICT DO NOTHING;
 
 -- ── 5. Drop the now-redundant JSONB column ────────────────
