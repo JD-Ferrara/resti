@@ -1,126 +1,87 @@
 -- ============================================================
--- Tags system: replaces the JSONB tags column on restaurants
+-- restaurant_tags: single wide pivot table
 -- ============================================================
--- Two tables:
---   tags            — canonical tag definitions (category + key + label)
---   restaurant_tags — join table linking restaurants ↔ tags
+-- One row per restaurant. Each tag is a boolean column.
+-- Columns: restaurant_id (PK), restaurant_name, then one column
+-- per tag — grouped by category in the order below.
 --
--- Run this AFTER your restaurants table already exists.
--- The migration section at the bottom backfills restaurant_tags
--- from the existing restaurants.tags JSONB column, then drops it.
+-- This replaces the previous two-table approach (tags + join table).
+-- Run this file in Supabase SQL Editor. Safe to re-run.
+-- ============================================================
 
--- ── 1. Tag definitions ────────────────────────────────────
-CREATE TABLE IF NOT EXISTS tags (
-  id          SERIAL PRIMARY KEY,
-  category    TEXT NOT NULL,    -- occasion | vibe | drinks | food | group | dietary | value
-  tag_key     TEXT NOT NULL,    -- snake_case key used in app logic
-  label       TEXT NOT NULL,    -- human-readable display label
-  UNIQUE(category, tag_key)
+-- ── 0. Drop old tables if they exist ─────────────────────────
+-- The old schema used a separate `tags` definition table and a
+-- junction restaurant_tags table. Replace both with this file.
+DROP TABLE IF EXISTS restaurant_tags CASCADE;
+DROP TABLE IF EXISTS tags CASCADE;
+
+
+-- ── 1. Create the wide pivot table ───────────────────────────
+CREATE TABLE restaurant_tags (
+  restaurant_id   INTEGER PRIMARY KEY REFERENCES restaurants(id) ON DELETE CASCADE,
+  restaurant_name TEXT    NOT NULL,
+
+  -- ── Occasion ──
+  romantic_milestone        BOOLEAN NOT NULL DEFAULT FALSE,
+  saturday_night_out        BOOLEAN NOT NULL DEFAULT FALSE,
+  birthday_dinner           BOOLEAN NOT NULL DEFAULT FALSE,
+  business_dinner           BOOLEAN NOT NULL DEFAULT FALSE,
+  business_lunch            BOOLEAN NOT NULL DEFAULT FALSE,
+  first_date                BOOLEAN NOT NULL DEFAULT FALSE,
+  anniversary               BOOLEAN NOT NULL DEFAULT FALSE,
+  after_work_drinks         BOOLEAN NOT NULL DEFAULT FALSE,
+  sunday_brunch             BOOLEAN NOT NULL DEFAULT FALSE,
+
+  -- ── Vibe ──
+  intimate_quiet            BOOLEAN NOT NULL DEFAULT FALSE,
+  buzzy_lively              BOOLEAN NOT NULL DEFAULT FALSE,
+  trendy_scene              BOOLEAN NOT NULL DEFAULT FALSE,
+  unpretentious             BOOLEAN NOT NULL DEFAULT FALSE,
+  old_school_classic        BOOLEAN NOT NULL DEFAULT FALSE,
+  hidden_gem                BOOLEAN NOT NULL DEFAULT FALSE,
+  cozy                      BOOLEAN NOT NULL DEFAULT FALSE,
+  grand_impressive          BOOLEAN NOT NULL DEFAULT FALSE,
+
+  -- ── Drinks ──
+  craft_cocktails           BOOLEAN NOT NULL DEFAULT FALSE,
+  extensive_wine_list       BOOLEAN NOT NULL DEFAULT FALSE,
+  natural_wine              BOOLEAN NOT NULL DEFAULT FALSE,
+  great_beer_selection      BOOLEAN NOT NULL DEFAULT FALSE,
+  standard_bar              BOOLEAN NOT NULL DEFAULT FALSE,
+  destination_bar           BOOLEAN NOT NULL DEFAULT FALSE,
+
+  -- ── Food ──
+  sharing_plates            BOOLEAN NOT NULL DEFAULT FALSE,
+  tasting_menu              BOOLEAN NOT NULL DEFAULT FALSE,
+  traditional_entrees       BOOLEAN NOT NULL DEFAULT FALSE,
+  bar_snacks_only           BOOLEAN NOT NULL DEFAULT FALSE,
+  chef_driven               BOOLEAN NOT NULL DEFAULT FALSE,
+
+  -- ── Group ──
+  solo_friendly             BOOLEAN NOT NULL DEFAULT FALSE,
+  large_group               BOOLEAN NOT NULL DEFAULT FALSE,
+  couples_only_vibe         BOOLEAN NOT NULL DEFAULT FALSE,
+  family_friendly           BOOLEAN NOT NULL DEFAULT FALSE,
+  watch_games_with_friends  BOOLEAN NOT NULL DEFAULT FALSE,
+
+  -- ── Dietary ──
+  vegan                     BOOLEAN NOT NULL DEFAULT FALSE,
+  vegetarian_friendly       BOOLEAN NOT NULL DEFAULT FALSE,
+  gluten_free_friendly      BOOLEAN NOT NULL DEFAULT FALSE,
+
+  -- ── Value ──
+  worth_the_splurge         BOOLEAN NOT NULL DEFAULT FALSE,
+  overpriced_for_what_it_is BOOLEAN NOT NULL DEFAULT FALSE,
+  great_value               BOOLEAN NOT NULL DEFAULT FALSE,
+  corporate_card_only       BOOLEAN NOT NULL DEFAULT FALSE,
+  happy_hour_deal           BOOLEAN NOT NULL DEFAULT FALSE,
+  budget_friendly           BOOLEAN NOT NULL DEFAULT FALSE
 );
 
--- ── 2. Seed all tag definitions ───────────────────────────
-INSERT INTO tags (category, tag_key, label) VALUES
 
-  -- Occasion
-  ('occasion', 'romantic_milestone',   'Romantic / Milestone'),
-  ('occasion', 'saturday_night_out',   'Saturday Night Out'),
-  ('occasion', 'birthday_dinner',      'Birthday Dinner'),
-  ('occasion', 'business_dinner',      'Business Dinner'),
-  ('occasion', 'business_lunch',       'Business Lunch'),
-  ('occasion', 'first_date',           'First Date'),
-  ('occasion', 'anniversary',          'Anniversary'),
-  ('occasion', 'after_work_drinks',    'After Work Drinks'),
-  ('occasion', 'sunday_brunch',        'Sunday Brunch'),
-
-  -- Vibe
-  ('vibe', 'intimate_quiet',      'Intimate & Quiet'),
-  ('vibe', 'buzzy_lively',        'Buzzy & Lively'),
-  ('vibe', 'trendy_scene',        'Trendy Scene'),
-  ('vibe', 'unpretentious',       'Unpretentious'),
-  ('vibe', 'old_school_classic',  'Old School Classic'),
-  ('vibe', 'hidden_gem',          'Hidden Gem'),
-  ('vibe', 'cozy',                'Cozy'),
-  ('vibe', 'grand_impressive',    'Grand & Impressive'),
-
-  -- Drinks
-  ('drinks', 'craft_cocktails',      'Craft Cocktails'),
-  ('drinks', 'extensive_wine_list',  'Extensive Wine List'),
-  ('drinks', 'natural_wine',         'Natural Wine'),
-  ('drinks', 'great_beer_selection', 'Great Beer Selection'),
-  ('drinks', 'standard_bar',         'Standard Bar'),
-  ('drinks', 'destination_bar',      'Destination Bar'),
-
-  -- Food
-  ('food', 'sharing_plates',    'Sharing Plates'),
-  ('food', 'tasting_menu',      'Tasting Menu'),
-  ('food', 'traditional_entrees','Traditional Entrees'),
-  ('food', 'bar_snacks_only',   'Bar Snacks Only'),
-  ('food', 'chef_driven',       'Chef-Driven'),
-
-  -- Group
-  ('group', 'solo_friendly',            'Solo Friendly'),
-  ('group', 'large_group',              'Large Group'),
-  ('group', 'couples_only_vibe',        'Couples Only Vibe'),
-  ('group', 'family_friendly',          'Family Friendly'),
-  ('group', 'watch_games_with_friends', 'Watch Games with Friends'),
-
-  -- Dietary
-  ('dietary', 'vegan',                 'Vegan'),
-  ('dietary', 'vegetarian_friendly',   'Vegetarian Friendly'),
-  ('dietary', 'gluten_free_friendly',  'Gluten-Free Friendly'),
-
-  -- Value
-  ('value', 'worth_the_splurge',        'Worth the Splurge'),
-  ('value', 'overpriced_for_what_it_is','Overpriced for What It Is'),
-  ('value', 'great_value',              'Great Value'),
-  ('value', 'corporate_card_only',      'Corporate Card Only'),
-  ('value', 'happy_hour_deal',          'Happy Hour Deal'),
-  ('value', 'budget_friendly',          'Budget Friendly')
-
-ON CONFLICT (category, tag_key) DO NOTHING;
-
--- ── 3. Restaurant ↔ Tag join table ────────────────────────
-CREATE TABLE IF NOT EXISTS restaurant_tags (
-  restaurant_id  INTEGER NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
-  tag_id         INTEGER NOT NULL REFERENCES tags(id)        ON DELETE CASCADE,
-  PRIMARY KEY (restaurant_id, tag_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_restaurant_tags_restaurant ON restaurant_tags(restaurant_id);
-CREATE INDEX IF NOT EXISTS idx_restaurant_tags_tag        ON restaurant_tags(tag_id);
-
--- ── 4. Migrate existing JSONB tags → restaurant_tags ─────
--- Reads the existing restaurants.tags JSONB (shape: {"occasion": ["key1","key2"], ...})
--- and creates the corresponding restaurant_tags rows.
---
--- Run once. Safe to re-run: INSERT ... ON CONFLICT DO NOTHING.
-
-INSERT INTO restaurant_tags (restaurant_id, tag_id)
-SELECT sub.restaurant_id, t.id
-FROM (
-  SELECT
-    r.id        AS restaurant_id,
-    cat.category,
-    kv.tag_key
-  FROM
-    restaurants r,
-    LATERAL jsonb_each(r.tags)                    AS cat(category, tag_keys),
-    LATERAL jsonb_array_elements_text(cat.tag_keys) AS kv(tag_key)
-  WHERE r.tags IS NOT NULL
-) sub
-JOIN tags t ON t.category = sub.category AND t.tag_key = sub.tag_key
-ON CONFLICT DO NOTHING;
-
--- ── 5. Drop the now-redundant JSONB column ────────────────
--- Only run this after verifying restaurant_tags is correctly populated.
--- Uncomment when ready:
---
--- ALTER TABLE restaurants DROP COLUMN IF EXISTS tags;
---
--- To verify before dropping:
--- SELECT r.id, r.name, array_agg(t.category || ':' || t.tag_key) AS tags
--- FROM restaurants r
--- LEFT JOIN restaurant_tags rt ON rt.restaurant_id = r.id
--- LEFT JOIN tags t ON t.id = rt.tag_id
--- GROUP BY r.id, r.name
--- ORDER BY r.id;
+-- ── 2. Seed one row per restaurant ───────────────────────────
+-- All tags start as FALSE. Edit them directly in the Supabase
+-- table editor — check the box to enable a tag for a restaurant.
+INSERT INTO restaurant_tags (restaurant_id, restaurant_name)
+SELECT id, name FROM restaurants
+ON CONFLICT (restaurant_id) DO UPDATE SET restaurant_name = EXCLUDED.restaurant_name;
