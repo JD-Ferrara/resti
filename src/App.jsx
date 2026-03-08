@@ -1,43 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { supabase } from "./supabase";
 
-// Creator registry — single source of truth
-const CREATORS = {
-  newyorkturk: {
-    id: "newyorkturk",
-    fullName: "Ertan Bek",
-    primaryHandle: "NewYorkTurk",
-    primaryPlatform: "tiktok",
-    platforms: ["tiktok", "instagram", "youtube"],
-    url: "https://www.tiktok.com/@newyorkturk",
-  },
-  foodalwayswon: {
-    id: "foodalwayswon",
-    fullName: "James Andrews",
-    primaryHandle: "jamesnu",
-    primaryPlatform: "youtube",
-    platforms: ["youtube", "instagram"],
-    url: "https://www.youtube.com/@jamesnu",
-  },
-};
-
-// Creator voice placeholders — replace quotes with real content once sourced
-const CREATOR_VOICES = {
-  5: [ // Greywind
-    { creatorId: "newyorkturk", quote: "Most underrated spot in Hudson Yards — the burger alone makes it worth the trip." },
-    { creatorId: "foodalwayswon", quote: "Greywind is doing everything right. Dan Kluger never misses." },
-  ],
-  24: [ // Ci Siamo
-    { creatorId: "newyorkturk", quote: "The caramelized onion torta is one of the best bites in the city right now." },
-    { creatorId: "foodalwayswon", quote: "Live-fire Italian done with real intention. This is a Danny Meyer classic in the making." },
-  ],
-  25: [ // Papa San
-    { creatorId: "newyorkturk", quote: "The eel pizza sounds insane — it tastes even better. One of the most exciting openings of 2025." },
-  ],
-  2: [ // Zou Zou's
-    { creatorId: "foodalwayswon", quote: "Zou Zou's is the spot that finally gave Hudson Yards a restaurant worth bragging about." },
-  ],
-};
 
 
 const TAG_CATEGORIES = {
@@ -102,18 +65,18 @@ function CreatorVoices({ voices, onTrack }) {
   return (
     <div className="mb-4 space-y-2">
       {voices.map((v, i) => {
-        const creator = CREATORS[v.creatorId];
+        const creator = v.creator;
         if (!creator) return null;
         return (
           <a key={i} href={creator.url} target="_blank" rel="noopener noreferrer"
             onClick={() => onTrack?.("video_play")}
             className="flex items-start gap-2.5 p-2.5 rounded-xl bg-neutral-50 hover:bg-neutral-100 transition-colors no-underline group">
             <div className="shrink-0 mt-0.5 w-5 h-5 rounded-full bg-white border border-neutral-200 flex items-center justify-center">
-              {PLATFORM_ICON[creator.primaryPlatform]}
+              {PLATFORM_ICON[creator.primary_platform]}
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-[11px] text-neutral-600 leading-snug italic">"{v.quote}"</p>
-              <p className="text-[10px] text-neutral-400 mt-0.5 font-medium">{creator.fullName} | @{creator.primaryHandle}</p>
+              <p className="text-[10px] text-neutral-400 mt-0.5 font-medium">{creator.full_name} | @{creator.primary_handle}</p>
             </div>
             <svg className="shrink-0 mt-1 opacity-0 group-hover:opacity-40 transition-opacity" width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8">
               <path d="M2 10L10 2M10 2H5M10 2v5"/>
@@ -125,7 +88,7 @@ function CreatorVoices({ voices, onTrack }) {
   );
 }
 
-function Card({ r, activeTags, onTagClick, onTrack }) {
+function Card({ r, activeTags, onTagClick, onTrack, voices }) {
   const [tagsExpanded, setTagsExpanded] = useState(false);
   const allTags = Object.entries(r.tags).flatMap(([cat, ts]) => ts.map(t => ({ tag: t, category: cat })));
 
@@ -136,7 +99,6 @@ function Card({ r, activeTags, onTagClick, onTrack }) {
   const PREVIEW_COUNT = 4;
   const visibleTags = tagsExpanded ? sortedTags : sortedTags.slice(0, PREVIEW_COUNT);
   const hiddenCount = sortedTags.length - PREVIEW_COUNT;
-  const voices = CREATOR_VOICES[r.id];
 
   return (
     <div className="bg-white border border-neutral-100 rounded-2xl p-6 hover:border-neutral-200 hover:shadow-[0_2px_20px_rgba(0,0,0,0.06)] transition-all duration-200">
@@ -234,7 +196,7 @@ function Card({ r, activeTags, onTagClick, onTrack }) {
   );
 }
 
-function FilterBar({ activeTags, onTagToggle, onClear, priceFilter, onPriceToggle, creatorFilter, onCreatorToggle }) {
+function FilterBar({ activeTags, onTagToggle, onClear, priceFilter, onPriceToggle, creatorFilter, onCreatorToggle, creators }) {
   const [open, setOpen] = useState(null);
   const barRef = useRef(null);
 
@@ -312,7 +274,7 @@ function FilterBar({ activeTags, onTagToggle, onClear, priceFilter, onPriceToggl
                       <div className="min-w-[240px]">
                         <p className="text-[10px] font-semibold tracking-[0.1em] uppercase text-neutral-400 mb-3">Featured Creators</p>
                         <div className="flex flex-col gap-2">
-                          {Object.values(CREATORS).map(c => {
+                          {Object.values(creators).map(c => {
                             const active = creatorFilter.includes(c.id);
                             return (
                               <button key={c.id} onClick={() => onCreatorToggle(c.id)}
@@ -320,7 +282,7 @@ function FilterBar({ activeTags, onTagToggle, onClear, priceFilter, onPriceToggl
                                   ${active ? "bg-neutral-900 border-neutral-900" : "bg-white border-neutral-200 hover:border-neutral-400"}`}>
                                 <div>
                                   <div className="flex items-center gap-1.5">
-                                    <p className={`text-[12px] font-semibold leading-none ${active ? "text-white" : "text-neutral-700"}`}>{c.fullName}</p>
+                                    <p className={`text-[12px] font-semibold leading-none ${active ? "text-white" : "text-neutral-700"}`}>{c.full_name}</p>
                                     <div className="flex items-center gap-0.5">
                                       {c.platforms.map(p => (
                                         <span key={p} className={`flex items-center justify-center w-3.5 h-3.5 rounded-full ${active ? "bg-neutral-700" : "bg-neutral-100"}`}>
@@ -329,7 +291,7 @@ function FilterBar({ activeTags, onTagToggle, onClear, priceFilter, onPriceToggl
                                       ))}
                                     </div>
                                   </div>
-                                  <p className={`text-[10px] mt-0.5 ${active ? "text-neutral-300" : "text-neutral-400"}`}>@{c.primaryHandle}</p>
+                                  <p className={`text-[10px] mt-0.5 ${active ? "text-neutral-300" : "text-neutral-400"}`}>@{c.primary_handle}</p>
                                 </div>
                                 {active && (
                                   <svg className="w-4 h-4 text-white shrink-0 ml-3" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 16 16">
@@ -378,6 +340,10 @@ export default function App() {
   // Restaurant data from Supabase
   const [restaurants, setRestaurants] = useState([]);
   const [loadingRestaurants, setLoadingRestaurants] = useState(true);
+  // Creator data from Supabase — keyed by creator id for O(1) lookup
+  const [creators, setCreators] = useState({});
+  // Creator quotes from Supabase — keyed by restaurant_id
+  const [creatorVoices, setCreatorVoices] = useState({});
 
   useEffect(() => {
     supabase
@@ -387,6 +353,27 @@ export default function App() {
       .then(({ data, error }) => {
         if (!error && data) setRestaurants(data);
         setLoadingRestaurants(false);
+      });
+
+    supabase
+      .from("creators")
+      .select("*")
+      .then(({ data }) => {
+        if (data) setCreators(Object.fromEntries(data.map(c => [c.id, c])));
+      });
+
+    supabase
+      .from("creator_quotes")
+      .select("*, creator:creators(*)")
+      .then(({ data }) => {
+        if (data) {
+          const grouped = {};
+          data.forEach(q => {
+            if (!grouped[q.restaurant_id]) grouped[q.restaurant_id] = [];
+            grouped[q.restaurant_id].push({ creatorId: q.creator_id, quote: q.quote, creator: q.creator });
+          });
+          setCreatorVoices(grouped);
+        }
       });
   }, []);
 
@@ -550,12 +537,12 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
 
   const filtered = useMemo(() => restaurants.filter(r => {
     const q = search.toLowerCase();
-    const voiceCreatorIds = (CREATOR_VOICES[r.id] || []).map(v => v.creatorId);
+    const voiceCreatorIds = (creatorVoices[r.id] || []).map(v => v.creatorId);
     return (!q || r.name.toLowerCase().includes(q) || r.cuisine.toLowerCase().includes(q) || r.notes.toLowerCase().includes(q))
       && (!priceFilter.length || priceFilter.includes(r.price))
       && (!creatorFilter.length || creatorFilter.some(id => voiceCreatorIds.includes(id)))
       && activeTags.every(({ tag, category }) => r.tags[category]?.includes(tag));
-  }), [restaurants, activeTags, search, priceFilter, creatorFilter]);
+  }), [restaurants, creatorVoices, activeTags, search, priceFilter, creatorFilter]);
 
   return (
     <div className={`bg-[#FAF8F5] ${mode === "concierge" ? "h-dvh overflow-hidden" : "min-h-screen"}`} style={{ fontFamily: "-apple-system, 'SF Pro Text', 'SF Pro Display', BlinkMacSystemFont, 'Helvetica Neue', sans-serif" }}>
@@ -792,6 +779,7 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
             onPriceToggle={p => setPriceFilter(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p])}
             creatorFilter={creatorFilter}
             onCreatorToggle={id => setCreatorFilter(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])}
+            creators={creators}
           />
 
           {/* Active filter chips */}
@@ -807,11 +795,11 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
                   </button>
                 ))}
                 {creatorFilter.map(id => {
-                  const c = CREATORS[id];
+                  const c = creators[id];
                   return c ? (
                     <button key={id} onClick={() => setCreatorFilter(prev => prev.filter(x => x !== id))}
                       className="inline-flex items-center gap-1 px-2.5 py-[3px] rounded-full text-[11px] font-medium border bg-neutral-900 text-white border-neutral-900">
-                      {c.fullName}
+                      {c.full_name}
                       <span className="text-white/60 hover:text-white ml-0.5">×</span>
                     </button>
                   ) : null;
@@ -838,7 +826,7 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5">
-                {filtered.map(r => <Card key={r.id} r={r} activeTags={activeTags} onTagClick={handleTagToggle} onTrack={(type) => trackEvent(r.id, type)} />)}
+                {filtered.map(r => <Card key={r.id} r={r} activeTags={activeTags} onTagClick={handleTagToggle} onTrack={(type) => trackEvent(r.id, type)} voices={creatorVoices[r.id]} />)}
               </div>
             )}
           </div>
