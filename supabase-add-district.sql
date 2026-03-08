@@ -1,35 +1,49 @@
 -- ============================================================
--- Add district column to the restaurants table
+-- Add district + area columns to the restaurants table
 -- ============================================================
 -- Run this in the Supabase SQL Editor.
--- The district column groups restaurants by neighborhood for
--- filtering in the UI. Values are manually curated.
+--
+-- district = broad neighborhood for UI filtering
+--            (Hudson Yards, Chelsea, West Village, etc.)
+--            All current restaurants = 'Hudson Yards'
+--
+-- area     = specific sub-area stored in the DB for future use
+--            (Manhattan West, The Spiral, etc.)
+--            Not shown in the UI yet — kept for map views,
+--            sub-area filtering, or editorial use later.
+--
+-- Manhattan West is a sub-segment of Hudson Yards:
+-- both share district = 'Hudson Yards' so users see one
+-- unified neighborhood, but area records the distinction
+-- for residents and for future sub-area features.
 
 ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS district TEXT;
+ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS area TEXT;
 
--- ── Backfill: Hudson Yards complex ───────────────────────
--- Addresses containing "Hudson Yards" (10/20/30 HY, Equinox, etc.)
+-- ── Backfill district ─────────────────────────────────────
+-- All current restaurants belong to the Hudson Yards district.
+-- Future restaurants in Chelsea, West Village, etc. will have
+-- their own district values once those neighborhoods are added.
+UPDATE restaurants SET district = 'Hudson Yards';
+
+-- ── Backfill area: Hudson Yards complex ──────────────────
+-- 10/20/30 HY, Equinox Hotel at 31 HY, The Shops, etc.
 UPDATE restaurants
-SET district = 'Hudson Yards'
+SET area = 'Hudson Yards'
 WHERE address ILIKE '%Hudson Yards%';
 
--- ── Backfill: Manhattan West development ─────────────────
--- Addresses explicitly in Manhattan West or The Spiral (W 33rd/34th St)
+-- ── Backfill area: Manhattan West / The Spiral ───────────
+-- The Manhattan West development (W 33rd/34th St, 9th/10th Ave)
+-- and The Spiral building — sub-area within the HY district.
 UPDATE restaurants
-SET district = 'Manhattan West'
+SET area = 'Manhattan West'
 WHERE address ILIKE '%Manhattan West%'
    OR address ILIKE '%The Spiral%'
    OR address ILIKE '%W 33rd%'
-   OR address ILIKE '%W 34th%';
-
--- ── Backfill: 9th/10th Ave corridor ──────────────────────
--- These addresses don't mention either complex by name but sit
--- in the same immediate area. Assign to Manhattan West for now.
--- Review and reassign as needed once Google Places confirms NTA boundaries.
-UPDATE restaurants
-SET district = 'Manhattan West'
-WHERE name IN ('Limusina', 'Greywind / Spygold', 'Kyma');
+   OR address ILIKE '%W 34th%'
+   OR name IN ('Limusina', 'Greywind / Spygold', 'Kyma');
 
 -- ── Verify ────────────────────────────────────────────────
--- Run this to confirm the backfill:
--- SELECT id, name, address, district FROM restaurants ORDER BY district, name;
+-- SELECT id, name, district, area, address
+-- FROM restaurants
+-- ORDER BY area, name;
