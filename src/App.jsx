@@ -395,17 +395,17 @@ export default function App() {
   useEffect(() => {
     supabase
       .from("restaurants")
-      .select("*, restaurant_tags(tag_id, tags(category, tag_key)), restaurant_sources(*)")
+      .select("*, restaurant_tags(*), restaurant_sources(*)")
       .order("id")
       .then(({ data, error }) => {
         if (!error && data) {
           const transformed = data.map(r => {
-            // Reshape restaurant_tags join rows → {occasion: [...], vibe: [...], ...}
+            // Convert wide boolean columns → {occasion: [...], vibe: [...], ...}
+            const rt = r.restaurant_tags?.[0] ?? {};
             const tags = {};
-            (r.restaurant_tags || []).forEach(rt => {
-              const { category, tag_key } = rt.tags;
-              if (!tags[category]) tags[category] = [];
-              tags[category].push(tag_key);
+            Object.entries(TAG_CATEGORIES).forEach(([catKey, cat]) => {
+              const active = Object.keys(cat.tags).filter(k => rt[k] === true);
+              if (active.length > 0) tags[catKey] = active;
             });
             // Flatten restaurant_sources (0 or 1 row) → plain object
             const sources = r.restaurant_sources?.[0] ?? {};
