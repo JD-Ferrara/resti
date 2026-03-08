@@ -34,7 +34,7 @@ function getSupabase() {
 
 // ── Shape a Place into a raw_places row ───────────────────
 
-function placeToRow(place, areaKey) {
+function placeToRow(place, areaKey, { status = 'pending', exclusionReason = null } = {}) {
   const { level, range } = normalizePriceLevel(place);
 
   return {
@@ -67,7 +67,8 @@ function placeToRow(place, areaKey) {
     search_area:           areaKey,
     is_permanently_closed: place.businessStatus === 'CLOSED_PERMANENTLY',
     last_pipeline_run:     new Date().toISOString(),
-    status:                'pending',
+    status,
+    exclusion_reason:      exclusionReason,
     raw_data:              place,
   };
 }
@@ -108,10 +109,12 @@ async function run() {
   console.log(`\n[3/4] Detecting neighborhoods...`);
   const enriched = await enrichWithNeighborhood(kept);
 
-  // 4. Upsert to Supabase
-  console.log(`\n[4/4] Upserting ${enriched.length} rows into raw_places...`);
+  // 4. Upsert to Supabase (kept + excluded)
+  const keptRows     = enriched.map((place) => placeToRow(place, areaKey, { status: 'pending' }));
+  const excludedRows = excluded.map(({ place, reason }) => placeToRow(place, areaKey, { status: 'excluded', exclusionReason: reason }));
+  const rows = [...keptRows, ...excludedRows];
 
-  const rows = enriched.map((place) => placeToRow(place, areaKey));
+  console.log(`\n[4/4] Upserting ${rows.length} rows into raw_places (${keptRows.length} pending, ${excludedRows.length} excluded)...`);
 
   // Batch upserts in chunks of 50
   const BATCH_SIZE = 50;
@@ -132,7 +135,7 @@ async function run() {
 
   console.log(`\n✅ Done. ${upserted} rows upserted to raw_places.`);
   console.log(`   Area: ${SEARCH_AREAS[areaKey].name}`);
-  console.log(`   Status: pending (ready for review + Claude enrichment)\n`);
+  console.log(`   ${keptRows.length} pending (ready for review)  |  ${excludedRows.length} excluded (stored for audit)\n`);
 }
 
 run().catch((err) => {

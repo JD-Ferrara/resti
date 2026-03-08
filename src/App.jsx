@@ -113,12 +113,18 @@ function Card({ r, activeTags, onTagClick, onTrack, voices }) {
         <span className="text-[12px] text-neutral-400 font-mono shrink-0 mt-0.5">{PRICE_LABELS[r.price]}</span>
       </div>
 
-      <p className="text-[11px] text-neutral-400 mb-3 flex items-center gap-1">
+      <p className="text-[11px] text-neutral-400 mb-1.5 flex items-center gap-1">
         <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" className="w-2.5 h-2.5 shrink-0 text-neutral-300">
           <path d="M7 1C4.8 1 3 2.8 3 5c0 3 4 8 4 8s4-5 4-8c0-2.2-1.8-4-4-4z"/><circle cx="7" cy="5" r="1.3"/>
         </svg>
         {r.address}
       </p>
+
+      {r.district && (
+        <span className="inline-block text-[10px] text-neutral-400 bg-neutral-100 px-2 py-0.5 rounded-full mb-3">
+          {r.district}
+        </span>
+      )}
 
       <p className="text-[13px] text-neutral-600 leading-[1.6] mb-4">{r.notes}</p>
 
@@ -196,7 +202,7 @@ function Card({ r, activeTags, onTagClick, onTrack, voices }) {
   );
 }
 
-function FilterBar({ activeTags, onTagToggle, onClear, priceFilter, onPriceToggle, creatorFilter, onCreatorToggle, creators }) {
+function FilterBar({ activeTags, onTagToggle, onClear, priceFilter, onPriceToggle, creatorFilter, onCreatorToggle, creators, districtFilter, onDistrictToggle, districts }) {
   const [open, setOpen] = useState(null);
   const barRef = useRef(null);
 
@@ -209,10 +215,11 @@ function FilterBar({ activeTags, onTagToggle, onClear, priceFilter, onPriceToggl
   }, []);
 
   const toggle = (key) => setOpen(prev => prev === key ? null : key);
-  const hasAnyFilter = activeTags.length > 0 || priceFilter.length > 0 || creatorFilter.length > 0;
+  const hasAnyFilter = activeTags.length > 0 || priceFilter.length > 0 || creatorFilter.length > 0 || districtFilter.length > 0;
 
   const filters = [
     { key: "price", label: "Price", count: priceFilter.length },
+    ...(districts.length > 0 ? [{ key: "district", label: "District", count: districtFilter.length }] : []),
     { key: "creator", label: "Creator", count: creatorFilter.length },
     ...Object.entries(TAG_CATEGORIES).map(([catKey, cat]) => ({
       key: catKey,
@@ -266,6 +273,29 @@ function FilterBar({ activeTags, onTagToggle, onClear, priceFilter, onPriceToggl
                               {PRICE_LABELS[p]}
                             </button>
                           ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {f.key === "district" && (
+                      <div className="min-w-[200px]">
+                        <p className="text-[10px] font-semibold tracking-[0.1em] uppercase text-neutral-400 mb-3">Neighborhood</p>
+                        <div className="flex flex-col gap-1.5">
+                          {districts.map(d => {
+                            const active = districtFilter.includes(d);
+                            return (
+                              <button key={d} onClick={() => onDistrictToggle(d)}
+                                className={`flex items-center justify-between px-3 py-2 rounded-xl text-left border transition-all duration-150 w-full
+                                  ${active ? "bg-neutral-900 border-neutral-900" : "bg-white border-neutral-200 hover:border-neutral-400"}`}>
+                                <span className={`text-[12px] font-medium ${active ? "text-white" : "text-neutral-700"}`}>{d}</span>
+                                {active && (
+                                  <svg className="w-4 h-4 text-white shrink-0 ml-3" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 16 16">
+                                    <path d="M3 8l4 4 6-7" strokeLinecap="round" strokeLinejoin="round"/>
+                                  </svg>
+                                )}
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
                     )}
@@ -412,6 +442,7 @@ You only know these restaurants. If asked about somewhere else, be honest about 
   const [search, setSearch] = useState("");
   const [priceFilter, setPriceFilter] = useState([]);
   const [creatorFilter, setCreatorFilter] = useState([]);
+  const [districtFilter, setDistrictFilter] = useState([]);
   const [aiInput, setAiInput] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiLabel, setAiLabel] = useState("");
@@ -535,14 +566,19 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
     return () => clearTimeout(t);
   }, [chatMessages]);
 
+  const districts = useMemo(() =>
+    [...new Set(restaurants.map(r => r.district).filter(Boolean))].sort(),
+  [restaurants]);
+
   const filtered = useMemo(() => restaurants.filter(r => {
     const q = search.toLowerCase();
     const voiceCreatorIds = (creatorVoices[r.id] || []).map(v => v.creatorId);
     return (!q || r.name.toLowerCase().includes(q) || r.cuisine.toLowerCase().includes(q) || r.notes.toLowerCase().includes(q))
       && (!priceFilter.length || priceFilter.includes(r.price))
       && (!creatorFilter.length || creatorFilter.some(id => voiceCreatorIds.includes(id)))
+      && (!districtFilter.length || districtFilter.includes(r.district))
       && activeTags.every(({ tag, category }) => r.tags[category]?.includes(tag));
-  }), [restaurants, creatorVoices, activeTags, search, priceFilter, creatorFilter]);
+  }), [restaurants, creatorVoices, activeTags, search, priceFilter, creatorFilter, districtFilter]);
 
   return (
     <div className={`bg-[#FAF8F5] ${mode === "concierge" ? "h-dvh overflow-hidden" : "min-h-screen"}`} style={{ fontFamily: "-apple-system, 'SF Pro Text', 'SF Pro Display', BlinkMacSystemFont, 'Helvetica Neue', sans-serif" }}>
@@ -774,16 +810,19 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
           <FilterBar
             activeTags={activeTags}
             onTagToggle={handleTagToggle}
-            onClear={() => { setActiveTags([]); setPriceFilter([]); setCreatorFilter([]); }}
+            onClear={() => { setActiveTags([]); setPriceFilter([]); setCreatorFilter([]); setDistrictFilter([]); }}
             priceFilter={priceFilter}
             onPriceToggle={p => setPriceFilter(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p])}
             creatorFilter={creatorFilter}
             onCreatorToggle={id => setCreatorFilter(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])}
             creators={creators}
+            districtFilter={districtFilter}
+            onDistrictToggle={d => setDistrictFilter(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d])}
+            districts={districts}
           />
 
           {/* Active filter chips */}
-          {(activeTags.length > 0 || priceFilter.length > 0 || creatorFilter.length > 0) && (
+          {(activeTags.length > 0 || priceFilter.length > 0 || creatorFilter.length > 0 || districtFilter.length > 0) && (
             <div className="bg-[#FAF8F5] border-b border-neutral-100">
               <div className="max-w-[1100px] mx-auto px-8 py-2 flex items-center gap-2 flex-wrap">
                 <span className="text-[10px] text-neutral-400 tracking-wider uppercase shrink-0">Active</span>
@@ -791,6 +830,13 @@ Reply with ONLY a raw JSON array, no markdown, no explanation:
                   <button key={p} onClick={() => setPriceFilter(prev => prev.filter(x => x !== p))}
                     className="inline-flex items-center gap-1 px-2.5 py-[3px] rounded-full text-[11px] font-medium border bg-neutral-900 text-white border-neutral-900">
                     {PRICE_LABELS[p]}
+                    <span className="text-white/60 hover:text-white ml-0.5">×</span>
+                  </button>
+                ))}
+                {districtFilter.map(d => (
+                  <button key={d} onClick={() => setDistrictFilter(prev => prev.filter(x => x !== d))}
+                    className="inline-flex items-center gap-1 px-2.5 py-[3px] rounded-full text-[11px] font-medium border bg-neutral-900 text-white border-neutral-900">
+                    {d}
                     <span className="text-white/60 hover:text-white ml-0.5">×</span>
                   </button>
                 ))}

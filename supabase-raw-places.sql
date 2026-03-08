@@ -102,6 +102,10 @@ CREATE TABLE IF NOT EXISTS raw_places (
   -- excluded  → filtered out (chain, low rating, permanently closed, etc.)
   -- imported  → fully processed and written to restaurants table
 
+  -- Why this place was excluded (set when status = 'excluded')
+  exclusion_reason        TEXT,
+  -- chain_excluded | low_rating | too_few_reviews | permanently_closed
+
   -- Full raw API response preserved for debugging / re-processing
   raw_data                JSONB
 );
