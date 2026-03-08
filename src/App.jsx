@@ -16,6 +16,23 @@ const TAG_CATEGORIES = {
 const PRICE_LABELS = { 1: "$", 2: "$$", 3: "$$$", 4: "$$$$" };
 const CAT_ACCENT = { occasion: "#D4163C", vibe: "#6D28D9", drinks: "#0369A1", food: "#B45309", group: "#047857", dietary: "#065F46", value: "#1E40AF" };
 
+// Editorial publications — ordered by prestige/usefulness for display.
+// Add new columns to restaurant_sources table first, then add here.
+const EDITORIAL_SOURCES = [
+  { key: "michelin",        label: "Michelin"          },
+  { key: "new_york_times",  label: "NY Times"          },
+  { key: "infatuation",     label: "The Infatuation"   },
+  { key: "eater",           label: "Eater NY"          },
+  { key: "new_york_mag",    label: "NY Mag"            },
+  { key: "robb_report",     label: "Robb Report"       },
+  { key: "bon_appetit",     label: "Bon Appétit"       },
+  { key: "timeout",         label: "Time Out"          },
+  { key: "vogue",           label: "Vogue"             },
+  { key: "wsj",             label: "WSJ"               },
+  { key: "wwd",             label: "WWD"               },
+  { key: "resy_blog",       label: "Resy"              },
+];
+
 
 
 function TagChip({ tag, category, active, onClick, onRemove }) {
@@ -155,8 +172,8 @@ function Card({ r, activeTags, onTagClick, onTrack, voices }) {
 
       <div className="flex items-center justify-between pt-3.5 mt-4 -mx-6 -mb-6 px-6 pb-4 rounded-b-2xl bg-neutral-50 border-t border-neutral-150">
         <div className="flex flex-wrap gap-x-3 gap-y-1">
-          {r.sources.map(s => (
-            <a key={s.label} href={s.url} target="_blank" rel="noopener noreferrer"
+          {EDITORIAL_SOURCES.filter(s => r.sources?.[s.key]).map(s => (
+            <a key={s.key} href={r.sources[s.key]} target="_blank" rel="noopener noreferrer"
               onClick={() => onTrack?.("editorial_click")}
               className="text-[11px] text-neutral-400 hover:text-neutral-700 transition-colors underline underline-offset-2 decoration-neutral-300 hover:decoration-neutral-500">
               {s.label}
@@ -378,10 +395,24 @@ export default function App() {
   useEffect(() => {
     supabase
       .from("restaurants")
-      .select("*")
+      .select("*, restaurant_tags(tag_id, tags(category, tag_key)), restaurant_sources(*)")
       .order("id")
       .then(({ data, error }) => {
-        if (!error && data) setRestaurants(data);
+        if (!error && data) {
+          const transformed = data.map(r => {
+            // Reshape restaurant_tags join rows → {occasion: [...], vibe: [...], ...}
+            const tags = {};
+            (r.restaurant_tags || []).forEach(rt => {
+              const { category, tag_key } = rt.tags;
+              if (!tags[category]) tags[category] = [];
+              tags[category].push(tag_key);
+            });
+            // Flatten restaurant_sources (0 or 1 row) → plain object
+            const sources = r.restaurant_sources?.[0] ?? {};
+            return { ...r, tags, sources };
+          });
+          setRestaurants(transformed);
+        }
         setLoadingRestaurants(false);
       });
 
