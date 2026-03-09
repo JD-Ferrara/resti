@@ -398,7 +398,17 @@ export default function App() {
       .select("*, restaurant_tags(*), restaurant_sources(*)")
       .order("id")
       .then(({ data, error }) => {
+        if (error) {
+          console.error("[resti] restaurants query error:", error);
+        }
         if (!error && data) {
+          // Diagnostic: log the raw embedded data for the first restaurant
+          // so you can inspect it in browser devtools (F12 → Console tab).
+          if (data[0]) {
+            console.log("[resti] raw restaurant_tags (first row):", data[0].restaurant_tags);
+            console.log("[resti] raw restaurant_sources (first row):", data[0].restaurant_sources);
+          }
+
           const transformed = data.map(r => {
             // Supabase returns 1:1 embedded tables (where FK is also PK) as an
             // object, not an array. Handle both forms defensively.
