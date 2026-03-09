@@ -199,7 +199,38 @@ async function fetchDiscoveryQueries(apiKey, areaConfig) {
   return results;
 }
 
-// ── Main ──────────────────────────────────────────────────
+// ── Fine-grained grid generator ───────────────────────────
+// The 60-result-per-query cap is the fundamental problem. Even with multiple
+// circles and separate type queries, popular restaurants fill those 60 slots
+// and specific places lose the ranking competition.
+//
+// Solution: generate a dense grid of tiny circles from the bounding box.
+// With 150m radius circles spaced 150m apart, each contains ≤5 restaurants —
+// the cap is never hit, so every restaurant in the box is guaranteed to appear.
+//
+// stepMeters controls grid density. 150m is optimal for a dense urban area
+// like Hudson Yards. Larger values reduce API calls but risk missing restaurants.
+
+const LAT_METERS_PER_DEG = 111_000;
+const LNG_METERS_PER_DEG_NYC = 84_000; // at ~40.75° latitude
+
+function generateGrid(bounds, stepMeters = 150) {
+  const latStep = stepMeters / LAT_METERS_PER_DEG;
+  const lngStep = stepMeters / LNG_METERS_PER_DEG_NYC;
+  const radius  = Math.round(stepMeters * 1.2); // slight overlap to avoid gaps at edges
+
+  const points = [];
+  for (let lat = bounds.south; lat <= bounds.north + latStep; lat += latStep) {
+    for (let lng = bounds.west; lng <= bounds.east + lngStep; lng += lngStep) {
+      points.push({
+        lat: Math.min(lat, bounds.north),
+        lng: Math.min(lng, bounds.east),
+        radius,
+      });
+    }
+  }
+  return points;
+}
 
 export async function fetchAllPlaces(areaKey) {
   const apiKey = process.env.GOOGLE_PLACES_API_KEY;
@@ -213,8 +244,14 @@ export async function fetchAllPlaces(areaKey) {
     throw new Error(`Unknown area "${areaKey}". Valid areas: ${valid}`);
   }
 
-  const searchPoints = areaConfig.searchPoints;
-  console.error(`\n📍 Fetching restaurants in ${areaConfig.name} (${searchPoints.length} search point${searchPoints.length > 1 ? 's' : ''})\n`);
+  const searchPoints = areaConfig.gridStepMeters
+    ? generateGrid(areaConfig.bounds, areaConfig.gridStepMeters)
+    : areaConfig.searchPoints;
+
+  const gridNote = areaConfig.gridStepMeters
+    ? `fine grid — ${searchPoints.length} cells × ${areaConfig.gridStepMeters}m`
+    : `${searchPoints.length} point${searchPoints.length > 1 ? 's' : ''}`;
+  console.error(`\n📍 Fetching restaurants in ${areaConfig.name} (${gridNote})\n`);
 
   const seen = new Set();
   const allPlaces = [];
