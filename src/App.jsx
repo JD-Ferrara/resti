@@ -331,7 +331,7 @@ function FilterBar({ activeTags, onTagToggle, onClear, priceFilter, onPriceToggl
                                   <div className="flex items-center gap-1.5">
                                     <p className={`text-[12px] font-semibold leading-none ${active ? "text-white" : "text-neutral-700"}`}>{c.full_name}</p>
                                     <div className="flex items-center gap-0.5">
-                                      {c.platforms.map(p => (
+                                      {(c.platforms || []).map(p => (
                                         <span key={p} className={`flex items-center justify-center w-3.5 h-3.5 rounded-full ${active ? "bg-neutral-700" : "bg-neutral-100"}`}>
                                           {PLATFORM_ICON[p]}
                                         </span>
@@ -400,15 +400,22 @@ export default function App() {
       .then(({ data, error }) => {
         if (!error && data) {
           const transformed = data.map(r => {
+            // Supabase returns 1:1 embedded tables (where FK is also PK) as an
+            // object, not an array. Handle both forms defensively.
+            const rtRaw = r.restaurant_tags;
+            const rt = Array.isArray(rtRaw) ? (rtRaw[0] ?? {}) : (rtRaw ?? {});
+
             // Convert wide boolean columns → {occasion: [...], vibe: [...], ...}
-            const rt = r.restaurant_tags?.[0] ?? {};
             const tags = {};
             Object.entries(TAG_CATEGORIES).forEach(([catKey, cat]) => {
               const active = Object.keys(cat.tags).filter(k => rt[k] === true);
               if (active.length > 0) tags[catKey] = active;
             });
+
             // Flatten restaurant_sources (0 or 1 row) → plain object
-            const sources = r.restaurant_sources?.[0] ?? {};
+            const srRaw = r.restaurant_sources;
+            const sources = Array.isArray(srRaw) ? (srRaw[0] ?? {}) : (srRaw ?? {});
+
             return { ...r, tags, sources };
           });
           setRestaurants(transformed);
