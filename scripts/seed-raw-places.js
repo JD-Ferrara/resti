@@ -61,25 +61,35 @@ function resolveAreaKeys(areaArg) {
   return keys;
 }
 
-// ── NTA polygon clip ──────────────────────────────────────
-// After neighborhood detection, keep only places whose detected district
-// matches one of the target area's nta_names. Others go to excluded list.
+// ── Bounding box clip ─────────────────────────────────────
+// Primary geographic filter. Uses the raw lat/lng from Google Places — no
+// GeoJSON fetch required. If an area has no bounds defined, all places pass.
+// This runs before NTA clipping and is the authoritative geographic gate.
 
-function clipToNtaBoundary(enriched, areaConfig) {
-  const { nta_names } = areaConfig;
-  if (!nta_names || nta_names.length === 0) return { clipped: enriched, outOfBounds: [] };
+function clipToBounds(enriched, areaConfig) {
+  const { bounds } = areaConfig;
+  if (!bounds) return { clipped: enriched, outOfBounds: [] };
 
   const clipped = [];
   const outOfBounds = [];
 
   for (const place of enriched) {
-    if (!place.district || nta_names.includes(place.district)) {
+    const lat = place.location?.latitude;
+    const lng = place.location?.longitude;
+    if (
+      lat != null &&
+      lng != null &&
+      lat >= bounds.south &&
+      lat <= bounds.north &&
+      lng >= bounds.west &&
+      lng <= bounds.east
+    ) {
       clipped.push(place);
     } else {
       outOfBounds.push({
         place,
-        reason: 'outside_district_boundary',
-        detail: `${getDisplayName(place)} — detected in "${place.district}", not in target NTA(s)`,
+        reason: 'outside_bounds',
+        detail: `${getDisplayName(place)} — (${lat?.toFixed(4)}, ${lng?.toFixed(4)}) outside ${areaConfig.name} bounding box`,
       });
     }
   }
@@ -150,10 +160,10 @@ async function runArea(areaKey, supabase) {
   console.log(`\n[3/4] Detecting neighborhoods...`);
   const enriched = await enrichWithNeighborhood(kept);
 
-  // 3b. NTA polygon clip — drop anything outside the district boundary
-  const { clipped, outOfBounds } = clipToNtaBoundary(enriched, areaConfig);
+  // 3b. Bounding box clip — drop anything outside the area's lat/lng bounds
+  const { clipped, outOfBounds } = clipToBounds(enriched, areaConfig);
   if (outOfBounds.length > 0) {
-    console.log(`  ✂️  Clipped ${outOfBounds.length} place(s) outside ${areaConfig.name} NTA boundary`);
+    console.log(`  ✂️  Clipped ${outOfBounds.length} place(s) outside ${areaConfig.name} bounds`);
     for (const { detail } of outOfBounds) console.log(`     · ${detail}`);
   }
 
