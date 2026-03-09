@@ -13,48 +13,58 @@ export const SEARCH_AREAS = {
     lat: 40.7534,
     lng: -74.0018,
     radius: 800,          // meters — covers Hudson Yards + Manhattan West
+    // NYC NTA polygon(s) used to clip results to the actual district boundary.
+    // Any place whose detected district doesn't match one of these is excluded.
+    nta_names: ['Hudson Yards-Chelsea-Flat Iron-Union Square'],
   },
   chelsea: {
     name: 'Chelsea',
     lat: 40.7465,
     lng: -74.0014,
     radius: 900,
+    nta_names: ['Chelsea', 'Hudson Yards-Chelsea-Flat Iron-Union Square'],
   },
   hells_kitchen: {
     name: "Hell's Kitchen",
     lat: 40.7614,
     lng: -73.9934,
     radius: 800,
+    nta_names: ["Hell's Kitchen", 'Clinton'],
   },
   west_village: {
     name: 'West Village',
     lat: 40.7337,
     lng: -74.0063,
     radius: 700,
+    nta_names: ['West Village', 'Greenwich Village-West'],
   },
   soho: {
     name: 'SoHo',
     lat: 40.7233,
     lng: -74.0030,
     radius: 700,
+    nta_names: ['SoHo-TriBeCa-Civic Center-Little Italy'],
   },
   lower_east_side: {
     name: 'Lower East Side',
     lat: 40.7153,
     lng: -73.9862,
     radius: 700,
+    nta_names: ['Lower East Side'],
   },
   tribeca: {
     name: 'Tribeca',
     lat: 40.7163,
     lng: -74.0086,
     radius: 700,
+    nta_names: ['SoHo-TriBeCa-Civic Center-Little Italy'],
   },
   flatiron: {
     name: 'Flatiron',
     lat: 40.7410,
     lng: -73.9897,
     radius: 700,
+    nta_names: ['Flatiron', 'Hudson Yards-Chelsea-Flat Iron-Union Square'],
   },
 };
 

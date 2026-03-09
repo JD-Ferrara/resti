@@ -1,15 +1,16 @@
 // ============================================================
 // seed-raw-places.js — Upsert filtered places into Supabase raw_places
 // ============================================================
-// Runs the full pipeline (fetch → filter → neighborhood) for a given area,
-// then upserts results into the raw_places staging table.
+// Runs the full pipeline (fetch → filter → neighborhood → NTA clip) for one
+// or more areas, then upserts results into the raw_places staging table.
 //
 // Requires SUPABASE_SERVICE_ROLE_KEY (not the anon key) for server-side writes.
 // Uses upsert on google_place_id, so re-running is safe.
 //
 // Usage:
 //   node scripts/seed-raw-places.js --area hudson_yards
-//   node scripts/seed-raw-places.js --area chelsea
+//   node scripts/seed-raw-places.js --area hudson_yards,chelsea
+//   node scripts/seed-raw-places.js --area all
 
 import 'dotenv/config';
 import { createClient } from '@supabase/supabase-js';
@@ -30,6 +31,60 @@ function getSupabase() {
     );
   }
   return createClient(url, key);
+}
+
+// ── Parse --area argument ─────────────────────────────────
+// Supports: "all", a single key, or comma-separated keys.
+
+function resolveAreaKeys(areaArg) {
+  if (!areaArg) {
+    const valid = Object.keys(SEARCH_AREAS).join(', ');
+    console.error(`Usage: node scripts/seed-raw-places.js --area <area>`);
+    console.error(`  Single:    --area hudson_yards`);
+    console.error(`  Multiple:  --area hudson_yards,chelsea`);
+    console.error(`  All:       --area all`);
+    console.error(`  Available: ${valid}`);
+    process.exit(1);
+  }
+
+  if (areaArg === 'all') {
+    return Object.keys(SEARCH_AREAS);
+  }
+
+  const keys = areaArg.split(',').map((k) => k.trim());
+  for (const key of keys) {
+    if (!SEARCH_AREAS[key]) {
+      console.error(`Unknown area "${key}". Valid: ${Object.keys(SEARCH_AREAS).join(', ')}`);
+      process.exit(1);
+    }
+  }
+  return keys;
+}
+
+// ── NTA polygon clip ──────────────────────────────────────
+// After neighborhood detection, keep only places whose detected district
+// matches one of the target area's nta_names. Others go to excluded list.
+
+function clipToNtaBoundary(enriched, areaConfig) {
+  const { nta_names } = areaConfig;
+  if (!nta_names || nta_names.length === 0) return { clipped: enriched, outOfBounds: [] };
+
+  const clipped = [];
+  const outOfBounds = [];
+
+  for (const place of enriched) {
+    if (!place.district || nta_names.includes(place.district)) {
+      clipped.push(place);
+    } else {
+      outOfBounds.push({
+        place,
+        reason: 'outside_district_boundary',
+        detail: `${getDisplayName(place)} — detected in "${place.district}", not in target NTA(s)`,
+      });
+    }
+  }
+
+  return { clipped, outOfBounds };
 }
 
 // ── Shape a Place into a raw_places row ───────────────────
@@ -73,34 +128,20 @@ function placeToRow(place, areaKey, { status = 'pending', exclusionReason = null
   };
 }
 
-// ── Main ──────────────────────────────────────────────────
+// ── Run pipeline for a single area ────────────────────────
 
-async function run() {
-  const args = process.argv.slice(2);
-  const areaIdx = args.indexOf('--area');
-  const areaKey = areaIdx !== -1 ? args[areaIdx + 1] : null;
+async function runArea(areaKey, supabase) {
+  const areaConfig = SEARCH_AREAS[areaKey];
 
-  if (!areaKey) {
-    const valid = Object.keys(SEARCH_AREAS).join(', ');
-    console.error(`Usage: node scripts/seed-raw-places.js --area <area>`);
-    console.error(`Available areas: ${valid}`);
-    process.exit(1);
-  }
-
-  if (!SEARCH_AREAS[areaKey]) {
-    console.error(`Unknown area "${areaKey}". Valid: ${Object.keys(SEARCH_AREAS).join(', ')}`);
-    process.exit(1);
-  }
-
-  const supabase = getSupabase();
-
-  console.log(`\n🚀 Seeding raw_places for area: ${SEARCH_AREAS[areaKey].name}`);
+  console.log(`\n${'═'.repeat(56)}`);
+  console.log(`  ${areaConfig.name}`);
+  console.log(`${'═'.repeat(56)}`);
 
   // 1. Fetch
   console.log('\n[1/4] Fetching from Google Places...');
   const raw = await fetchAllPlaces(areaKey);
 
-  // 2. Filter
+  // 2. Filter (chains, rating, review count)
   console.log(`\n[2/4] Filtering ${raw.length} results...`);
   const { kept, excluded } = filterPlaces(raw);
   console.log(`  ✅ Kept: ${kept.length}  |  🚫 Excluded: ${excluded.length}`);
@@ -109,14 +150,23 @@ async function run() {
   console.log(`\n[3/4] Detecting neighborhoods...`);
   const enriched = await enrichWithNeighborhood(kept);
 
-  // 4. Upsert to Supabase (kept + excluded)
-  const keptRows     = enriched.map((place) => placeToRow(place, areaKey, { status: 'pending' }));
-  const excludedRows = excluded.map(({ place, reason }) => placeToRow(place, areaKey, { status: 'excluded', exclusionReason: reason }));
+  // 3b. NTA polygon clip — drop anything outside the district boundary
+  const { clipped, outOfBounds } = clipToNtaBoundary(enriched, areaConfig);
+  if (outOfBounds.length > 0) {
+    console.log(`  ✂️  Clipped ${outOfBounds.length} place(s) outside ${areaConfig.name} NTA boundary`);
+    for (const { detail } of outOfBounds) console.log(`     · ${detail}`);
+  }
+
+  // 4. Upsert to Supabase
+  const keptRows     = clipped.map((place) => placeToRow(place, areaKey, { status: 'pending' }));
+  const excludedRows = [
+    ...excluded.map(({ place, reason }) => placeToRow(place, areaKey, { status: 'excluded', exclusionReason: reason })),
+    ...outOfBounds.map(({ place, reason }) => placeToRow(place, areaKey, { status: 'excluded', exclusionReason: reason })),
+  ];
   const rows = [...keptRows, ...excludedRows];
 
-  console.log(`\n[4/4] Upserting ${rows.length} rows into raw_places (${keptRows.length} pending, ${excludedRows.length} excluded)...`);
+  console.log(`\n[4/4] Upserting ${rows.length} rows (${keptRows.length} pending, ${excludedRows.length} excluded)...`);
 
-  // Batch upserts in chunks of 50
   const BATCH_SIZE = 50;
   let upserted = 0;
 
@@ -126,16 +176,46 @@ async function run() {
       .from('raw_places')
       .upsert(batch, { onConflict: 'google_place_id' });
 
-    if (error) {
-      throw new Error(`Supabase upsert failed: ${error.message}`);
-    }
+    if (error) throw new Error(`Supabase upsert failed: ${error.message}`);
     upserted += batch.length;
     console.log(`  Upserted ${upserted}/${rows.length}...`);
   }
 
-  console.log(`\n✅ Done. ${upserted} rows upserted to raw_places.`);
-  console.log(`   Area: ${SEARCH_AREAS[areaKey].name}`);
-  console.log(`   ${keptRows.length} pending (ready for review)  |  ${excludedRows.length} excluded (stored for audit)\n`);
+  console.log(`\n  ✅ Done — ${keptRows.length} pending, ${excludedRows.length} excluded\n`);
+  return { areaKey, pending: keptRows.length, excluded: excludedRows.length };
+}
+
+// ── Main ──────────────────────────────────────────────────
+
+async function run() {
+  const args = process.argv.slice(2);
+  const areaIdx = args.indexOf('--area');
+  const areaArg = areaIdx !== -1 ? args[areaIdx + 1] : null;
+  const areaKeys = resolveAreaKeys(areaArg);
+
+  const supabase = getSupabase();
+
+  console.log(`\n🚀 Places pipeline — ${areaKeys.length} area(s): ${areaKeys.join(', ')}`);
+
+  const results = [];
+  for (const key of areaKeys) {
+    const result = await runArea(key, supabase);
+    results.push(result);
+  }
+
+  if (areaKeys.length > 1) {
+    console.log(`\n${'═'.repeat(56)}`);
+    console.log('  Summary');
+    console.log(`${'═'.repeat(56)}`);
+    let totalPending = 0, totalExcluded = 0;
+    for (const { areaKey, pending, excluded } of results) {
+      console.log(`  ${SEARCH_AREAS[areaKey].name}: ${pending} pending, ${excluded} excluded`);
+      totalPending += pending;
+      totalExcluded += excluded;
+    }
+    console.log(`  ─────────────────────`);
+    console.log(`  Total: ${totalPending} pending, ${totalExcluded} excluded\n`);
+  }
 }
 
 run().catch((err) => {

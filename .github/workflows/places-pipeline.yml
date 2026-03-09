@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       area:
-        description: 'Neighborhood to fetch'
+        description: 'Area(s) to fetch — single key, comma-separated, or "all"'
         required: true
         default: 'hudson_yards'
         type: choice
@@ -17,10 +17,11 @@ on:
           - lower_east_side
           - tribeca
           - flatiron
+          - all
 
 jobs:
   run-pipeline:
-    name: Fetch → Filter → Seed → Compare
+    name: Fetch → Filter → NTA Clip → Seed
     runs-on: ubuntu-latest
 
     steps:
@@ -37,12 +38,14 @@ jobs:
         run: npm install
 
       - name: Write .env
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          GOOGLE_PLACES_API_KEY: ${{ secrets.GOOGLE_PLACES_API_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
-          cat <<EOF > .env
-          VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }}
-          GOOGLE_PLACES_API_KEY=${{ secrets.GOOGLE_PLACES_API_KEY }}
-          SUPABASE_SERVICE_ROLE_KEY=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          EOF
+          echo "VITE_SUPABASE_URL=$VITE_SUPABASE_URL" >> .env
+          echo "GOOGLE_PLACES_API_KEY=$GOOGLE_PLACES_API_KEY" >> .env
+          echo "SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY" >> .env
 
       - name: Seed raw_places
         run: node scripts/seed-raw-places.js --area ${{ github.event.inputs.area }}
