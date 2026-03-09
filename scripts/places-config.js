@@ -193,8 +193,10 @@ export const PLACES_FIELD_MASK = [
 // NYC Open Data — Neighborhood Tabulation Areas (NTA) boundaries
 // Used by detect-neighborhood.js for turf.js point-in-polygon checks.
 // Fetched once and cached to scripts/cache/nyc-neighborhoods.geojson
+// Using the Socrata resource endpoint — more stable than the geospatial export URL.
+// $limit=5000 ensures all ~260 NTA features are returned (default cap is 1000).
 export const NYC_GEOJSON_URL =
-  'https://data.cityofnewyork.us/api/geospatial/cpf4-rkhq?method=export&type=GeoJSON';
+  'https://data.cityofnewyork.us/resource/cpf4-rkhq.geojson?$limit=5000';
 
 // Broader neighborhood area groupings — maps NTA names to a human-readable area label.
 // Add more NTA names as you expand to new areas.
