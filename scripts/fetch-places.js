@@ -40,17 +40,17 @@ function sleep(ms) {
 
 // ── Core fetch ────────────────────────────────────────────
 
-async function fetchPage(apiKey, areaConfig, pageToken = null) {
+async function fetchPage(apiKey, point, pageToken = null) {
   const body = {
     includedTypes: ['restaurant'],
     maxResultCount: MAX_RESULTS_PER_PAGE,
     locationRestriction: {
       circle: {
         center: {
-          latitude: areaConfig.lat,
-          longitude: areaConfig.lng,
+          latitude: point.lat,
+          longitude: point.lng,
         },
-        radius: areaConfig.radius,
+        radius: point.radius,
       },
     },
   };
@@ -69,12 +69,44 @@ async function fetchPage(apiKey, areaConfig, pageToken = null) {
     body: JSON.stringify(body),
   });
 
+
   if (!res.ok) {
     const errorText = await res.text();
     throw new Error(`Google Places API error ${res.status}: ${errorText}`);
   }
 
   return res.json();
+}
+
+// ── Per-point fetch ───────────────────────────────────────
+
+async function fetchAllForPoint(apiKey, point, pointLabel) {
+  const pointPlaces = [];
+  let pageToken = null;
+  let page = 1;
+
+  while (page <= MAX_PAGES) {
+    console.error(`     [${pointLabel}] Page ${page}/${MAX_PAGES}...`);
+
+    if (pageToken) {
+      await sleep(2000);
+    }
+
+    const data = await fetchPage(apiKey, point, pageToken);
+    const places = data.places || [];
+
+    console.error(`     [${pointLabel}] Found ${places.length} results`);
+    pointPlaces.push(...places);
+
+    if (!data.nextPageToken || places.length < MAX_RESULTS_PER_PAGE) {
+      break;
+    }
+
+    pageToken = data.nextPageToken;
+    page++;
+  }
+
+  return pointPlaces;
 }
 
 // ── Main ──────────────────────────────────────────────────
@@ -91,38 +123,34 @@ export async function fetchAllPlaces(areaKey) {
     throw new Error(`Unknown area "${areaKey}". Valid areas: ${valid}`);
   }
 
-  console.error(`\n📍 Fetching restaurants near ${areaConfig.name}`);
-  console.error(`   Coordinates: ${areaConfig.lat}, ${areaConfig.lng}`);
-  console.error(`   Radius: ${areaConfig.radius}m\n`);
+  const searchPoints = areaConfig.searchPoints;
+  console.error(`\n📍 Fetching restaurants in ${areaConfig.name} (${searchPoints.length} search point${searchPoints.length > 1 ? 's' : ''})\n`);
 
+  const seen = new Set();
   const allPlaces = [];
-  let pageToken = null;
-  let page = 1;
 
-  while (page <= MAX_PAGES) {
-    console.error(`   → Page ${page}/${MAX_PAGES}...`);
+  for (let i = 0; i < searchPoints.length; i++) {
+    const point = searchPoints[i];
+    const label = searchPoints.length > 1 ? `point ${i + 1}/${searchPoints.length} — ${point.lat},${point.lng} r=${point.radius}m` : `${point.lat},${point.lng} r=${point.radius}m`;
+    console.error(`   → ${label}`);
 
-    // Google requires a short delay before using a nextPageToken
-    if (pageToken) {
-      await sleep(2000);
+    const places = await fetchAllForPoint(apiKey, point, `${i + 1}`);
+
+    let newCount = 0;
+    for (const place of places) {
+      if (!seen.has(place.id)) {
+        seen.add(place.id);
+        allPlaces.push(place);
+        newCount++;
+      }
     }
 
-    const data = await fetchPage(apiKey, areaConfig, pageToken);
-    const places = data.places || [];
-
-    console.error(`     Found ${places.length} results`);
-    allPlaces.push(...places);
-
-    if (!data.nextPageToken || places.length < MAX_RESULTS_PER_PAGE) {
-      console.error(`   → No more pages.`);
-      break;
+    if (searchPoints.length > 1) {
+      console.error(`     → ${newCount} new unique results (${places.length - newCount} duplicates)\n`);
     }
-
-    pageToken = data.nextPageToken;
-    page++;
   }
 
-  console.error(`\n✅ Total fetched: ${allPlaces.length} restaurants\n`);
+  console.error(`\n✅ Total unique restaurants: ${allPlaces.length}\n`);
   return allPlaces;
 }
 
