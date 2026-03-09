@@ -436,15 +436,18 @@ export default function App() {
     supabase
       .from("creators")
       .select("*")
-      .then(({ data }) => {
+      .then(({ data, error }) => {
+        if (error) console.error("[resti] creators error:", error);
         if (data) setCreators(Object.fromEntries(data.map(c => [c.id, c])));
       });
 
     supabase
       .from("creator_quotes")
       .select("*, creator:creators(*)")
-      .then(({ data }) => {
+      .then(({ data, error }) => {
+        if (error) console.error("[resti] creator_quotes error:", error);
         if (data) {
+          console.log("[resti] creator_quotes rows:", data.length, data[0]);
           const grouped = {};
           data.forEach(q => {
             if (!grouped[q.restaurant_id]) grouped[q.restaurant_id] = [];
