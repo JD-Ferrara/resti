@@ -16,15 +16,12 @@
 export const SEARCH_AREAS = {
   hudson_yards: {
     name: 'Hudson Yards',
-    // 2 tightly focused circles centered on the actual HY development footprint:
-    // The Shops at HY / 30-35 Hudson Yards complex, and Manhattan West.
-    // Smaller radius (400m) means fewer outskirt restaurants compete for the 60-result slots.
-    searchPoints: [
-      { lat: 40.7535, lng: -74.0040, radius: 400 }, // HY core — The Shops, Vessel, 30/35/50 HY
-      { lat: 40.7490, lng: -73.9995, radius: 400 }, // Manhattan West + southern approach
-    ],
+    // Fine-grained grid mode: auto-generates ~150m-radius circles across the entire
+    // bounding box. With ≤5 restaurants per tiny circle, the 60-result cap is never
+    // hit — every restaurant in the box is guaranteed to be returned regardless of
+    // Google's ranking algorithm.
+    gridStepMeters: 150,
     // Tight bounding box around the HY development (28th–36th St, 9th–12th Ave).
-    // This is the authoritative geographic filter — replaces unreliable NTA clipping.
     bounds: { north: 40.7570, south: 40.7440, east: -73.9940, west: -74.0145 },
     nta_names: ['Hudson Yards-Chelsea-Flat Iron-Union Square'],
   },
