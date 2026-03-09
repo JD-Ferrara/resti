@@ -5,65 +5,72 @@
 // or adjust chain exclusion / QSR allowlists.
 
 // ── Search Areas ─────────────────────────────────────────
-// Each area defines a geographic anchor + radius for Nearby Search.
-// Add new entries here as you expand beyond Hudson Yards.
+// Each area defines a name, NTA boundary filter, and one or more searchPoints.
+// searchPoints is an array of {lat, lng, radius} circles — the API is called
+// for each point independently (up to 60 results each) and results are merged
+// + deduplicated by google_place_id. Use multiple points for dense neighborhoods
+// to work around the Google Places 60-result-per-circle cap.
 export const SEARCH_AREAS = {
   hudson_yards: {
     name: 'Hudson Yards',
-    lat: 40.7534,
-    lng: -74.0018,
-    radius: 800,          // meters — covers Hudson Yards + Manhattan West
-    // NYC NTA polygon(s) used to clip results to the actual district boundary.
-    // Any place whose detected district doesn't match one of these is excluded.
+    // 4-point grid covering 30th–42nd St, 9th–12th Ave at 450m radius each.
+    // Replaces the old single 800m circle (60 results) with up to 240 results.
+    searchPoints: [
+      { lat: 40.7480, lng: -74.0065, radius: 450 }, // SW — The Shops at HY / 11th Ave
+      { lat: 40.7480, lng: -73.9975, radius: 450 }, // SE — Manhattan West / 9th Ave
+      { lat: 40.7565, lng: -74.0065, radius: 450 }, // NW — Javits / upper 11th Ave
+      { lat: 40.7565, lng: -73.9975, radius: 450 }, // NE — upper 9th Ave / Midtown West
+    ],
     nta_names: ['Hudson Yards-Chelsea-Flat Iron-Union Square'],
   },
   chelsea: {
     name: 'Chelsea',
-    lat: 40.7465,
-    lng: -74.0014,
-    radius: 900,
+    // 4-point grid covering 14th–30th St, 7th–11th Ave at 450m radius each.
+    searchPoints: [
+      { lat: 40.7410, lng: -74.0050, radius: 450 }, // SW — lower Chelsea / 10th Ave
+      { lat: 40.7410, lng: -73.9960, radius: 450 }, // SE — lower Chelsea / 8th Ave
+      { lat: 40.7490, lng: -74.0050, radius: 450 }, // NW — upper Chelsea / 10th Ave
+      { lat: 40.7490, lng: -73.9960, radius: 450 }, // NE — upper Chelsea / 8th Ave
+    ],
     nta_names: ['Chelsea', 'Hudson Yards-Chelsea-Flat Iron-Union Square'],
   },
   hells_kitchen: {
     name: "Hell's Kitchen",
-    lat: 40.7614,
-    lng: -73.9934,
-    radius: 800,
+    // 2-point grid covering 42nd–57th St, 8th–12th Ave.
+    searchPoints: [
+      { lat: 40.7565, lng: -73.9970, radius: 400 }, // South — 42nd–48th St
+      { lat: 40.7640, lng: -73.9970, radius: 400 }, // North — 50th–57th St
+    ],
     nta_names: ["Hell's Kitchen", 'Clinton'],
   },
   west_village: {
     name: 'West Village',
-    lat: 40.7337,
-    lng: -74.0063,
-    radius: 700,
+    searchPoints: [{ lat: 40.7337, lng: -74.0063, radius: 700 }],
     nta_names: ['West Village', 'Greenwich Village-West'],
   },
   soho: {
     name: 'SoHo',
-    lat: 40.7233,
-    lng: -74.0030,
-    radius: 700,
+    searchPoints: [{ lat: 40.7233, lng: -74.0030, radius: 700 }],
     nta_names: ['SoHo-TriBeCa-Civic Center-Little Italy'],
+  },
+  noho: {
+    name: 'NoHo / Greenwich Village',
+    searchPoints: [{ lat: 40.7270, lng: -73.9950, radius: 650 }],
+    nta_names: ['Greenwich Village', 'Greenwich Village-West', 'SoHo-TriBeCa-Civic Center-Little Italy'],
   },
   lower_east_side: {
     name: 'Lower East Side',
-    lat: 40.7153,
-    lng: -73.9862,
-    radius: 700,
+    searchPoints: [{ lat: 40.7153, lng: -73.9862, radius: 700 }],
     nta_names: ['Lower East Side'],
   },
   tribeca: {
     name: 'Tribeca',
-    lat: 40.7163,
-    lng: -74.0086,
-    radius: 700,
+    searchPoints: [{ lat: 40.7163, lng: -74.0086, radius: 700 }],
     nta_names: ['SoHo-TriBeCa-Civic Center-Little Italy'],
   },
   flatiron: {
     name: 'Flatiron',
-    lat: 40.7410,
-    lng: -73.9897,
-    radius: 700,
+    searchPoints: [{ lat: 40.7410, lng: -73.9897, radius: 700 }],
     nta_names: ['Flatiron', 'Hudson Yards-Chelsea-Flat Iron-Union Square'],
   },
 };
