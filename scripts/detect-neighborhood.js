@@ -14,7 +14,16 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import booleanPointInPolygon from '@turf/boolean-point-in-polygon';
 import { point } from '@turf/helpers';
-import { NYC_GEOJSON_URL, NEIGHBORHOOD_AREA_MAP } from './places-config.js';
+import { NEIGHBORHOOD_AREA_MAP } from './places-config.js';
+
+// Multiple candidate URLs — tried in order until one succeeds.
+// NYC Open Data changes their export endpoints periodically.
+const NYC_GEOJSON_URLS = [
+  // 2010 NTA — Socrata resource endpoint
+  'https://data.cityofnewyork.us/resource/cpf4-rkhq.geojson?$limit=5000',
+  // 2020 NTA — updated dataset
+  'https://data.cityofnewyork.us/resource/9nt8-h7nd.geojson?$limit=5000',
+];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CACHE_DIR = join(__dirname, 'cache');
@@ -28,18 +37,34 @@ async function loadNycGeoJSON() {
     return JSON.parse(readFileSync(CACHE_PATH, 'utf-8'));
   }
 
-  console.error(`   🌐 Fetching NYC neighborhood GeoJSON from NYC Open Data...`);
-  const res = await fetch(NYC_GEOJSON_URL);
-  if (!res.ok) {
-    throw new Error(`Failed to fetch NYC GeoJSON: ${res.status} ${res.statusText}`);
+  console.error(`   🌐 Fetching NYC neighborhood GeoJSON...`);
+
+  for (const url of NYC_GEOJSON_URLS) {
+    try {
+      console.error(`   → Trying: ${url}`);
+      const res = await fetch(url);
+      if (!res.ok) {
+        console.error(`     ✗ ${res.status} ${res.statusText}`);
+        continue;
+      }
+      const geojson = await res.json();
+      if (!geojson.features?.length) {
+        console.error(`     ✗ Empty response`);
+        continue;
+      }
+      mkdirSync(CACHE_DIR, { recursive: true });
+      writeFileSync(CACHE_PATH, JSON.stringify(geojson));
+      console.error(`   💾 Cached to ${CACHE_PATH} (${geojson.features.length} features)`);
+      return geojson;
+    } catch (err) {
+      console.error(`     ✗ ${err.message}`);
+    }
   }
 
-  const geojson = await res.json();
-  mkdirSync(CACHE_DIR, { recursive: true });
-  writeFileSync(CACHE_PATH, JSON.stringify(geojson));
-  console.error(`   💾 Cached to ${CACHE_PATH}`);
-
-  return geojson;
+  // All URLs failed — proceed without neighborhood detection rather than crashing.
+  console.error(`   ⚠️  All GeoJSON sources failed. Neighborhood detection will be skipped.`);
+  console.error(`      Places will still be seeded; district/neighborhood_area will be null.`);
+  return null;
 }
 
 // ── Neighborhood lookup ───────────────────────────────────
@@ -92,6 +117,11 @@ export function detectNeighborhood(lat, lng, geojson) {
  */
 export async function enrichWithNeighborhood(places) {
   const geojson = await loadNycGeoJSON();
+
+  if (!geojson) {
+    // GeoJSON unavailable — return places as-is with null district fields
+    return places.map((place) => ({ ...place, district: null, neighborhood_area: null }));
+  }
 
   return places.map((place) => {
     const lat = place.location?.latitude;
