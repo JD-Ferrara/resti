@@ -21,6 +21,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUTPUT_DIR = join(__dirname, 'output');
 
 const NEARBY_SEARCH_URL = 'https://places.googleapis.com/v1/places:searchNearby';
+const TEXT_SEARCH_URL   = 'https://places.googleapis.com/v1/places:searchText';
 const MAX_RESULTS_PER_PAGE = 20;
 const MAX_PAGES = 3; // Google caps Nearby Search at 60 total results
 
@@ -120,6 +121,84 @@ async function fetchAllForPoint(apiKey, point, pointLabel) {
   return pointPlaces;
 }
 
+// ── Discovery text search ─────────────────────────────────
+// searchNearby ranks by proximity/popularity and caps at 60 results per circle.
+// Restaurants can be invisible regardless of radius tuning if Google's algorithm
+// doesn't surface them. Text Search uses a completely different ranking model
+// (text relevance within a strict geographic area) and regularly returns places
+// that proximity search misses.
+//
+// We auto-generate queries from the area name + bounding box — no manual
+// restaurant names needed. Runs after proximity search; dedup handles overlap.
+
+async function fetchTextPage(apiKey, query, bounds, pageToken = null) {
+  const body = {
+    textQuery: query,
+    maxResultCount: MAX_RESULTS_PER_PAGE,
+    // Strict restriction (not just bias) — only returns results inside the box.
+    // This means the bounding box does double duty: text search restriction +
+    // post-filter in clipToBounds, so results are guaranteed geographic.
+    locationRestriction: {
+      rectangle: {
+        low:  { latitude: bounds.south, longitude: bounds.west },
+        high: { latitude: bounds.north, longitude: bounds.east },
+      },
+    },
+  };
+
+  if (pageToken) body.pageToken = pageToken;
+
+  const res = await fetch(TEXT_SEARCH_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': apiKey,
+      'X-Goog-FieldMask': PLACES_FIELD_MASK,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Text Search error ${res.status}: ${err}`);
+  }
+
+  return res.json();
+}
+
+async function fetchDiscoveryQueries(apiKey, areaConfig) {
+  const { name, bounds } = areaConfig;
+  if (!bounds) return [];
+
+  // Generic food/drink terms anchored to the area name.
+  // Three queries × up to 60 results each = up to 180 additional unique candidates.
+  const queries = [`restaurant ${name}`, `bar ${name}`, `dining ${name}`];
+  const results = [];
+
+  console.error(`\n   🔍 Discovery text search (${name})...`);
+
+  for (const query of queries) {
+    let pageToken = null;
+    let page = 1;
+
+    while (page <= MAX_PAGES) {
+      if (pageToken) await sleep(2000);
+
+      const data = await fetchTextPage(apiKey, query, bounds, pageToken);
+      const places = data.places || [];
+
+      console.error(`     ["${query}"] p${page}: ${places.length} results`);
+      results.push(...places);
+
+      if (!data.nextPageToken || places.length < MAX_RESULTS_PER_PAGE) break;
+      pageToken = data.nextPageToken;
+      page++;
+    }
+  }
+
+  return results;
+}
+
 // ── Main ──────────────────────────────────────────────────
 
 export async function fetchAllPlaces(areaKey) {
@@ -161,7 +240,19 @@ export async function fetchAllPlaces(areaKey) {
     }
   }
 
-  console.error(`\n✅ Total unique restaurants: ${allPlaces.length}\n`);
+  // Discovery text queries — catches places that proximity ranking misses
+  const discoveryResults = await fetchDiscoveryQueries(apiKey, areaConfig);
+  let discoveryNew = 0;
+  for (const place of discoveryResults) {
+    if (!seen.has(place.id)) {
+      seen.add(place.id);
+      allPlaces.push(place);
+      discoveryNew++;
+    }
+  }
+  if (discoveryNew > 0) console.error(`   → ${discoveryNew} new unique results from discovery search`);
+
+  console.error(`\n✅ Total unique results: ${allPlaces.length}\n`);
   return allPlaces;
 }
 
