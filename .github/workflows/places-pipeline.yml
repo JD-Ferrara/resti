@@ -1,0 +1,60 @@
+name: Google Places Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      area:
+        description: 'Neighborhood to fetch'
+        required: true
+        default: 'hudson_yards'
+        type: choice
+        options:
+          - hudson_yards
+          - chelsea
+          - hells_kitchen
+          - west_village
+          - soho
+          - lower_east_side
+          - tribeca
+          - flatiron
+
+jobs:
+  run-pipeline:
+    name: Fetch → Filter → Seed → Compare
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Write .env
+        run: |
+          cat <<EOF > .env
+          VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }}
+          GOOGLE_PLACES_API_KEY=${{ secrets.GOOGLE_PLACES_API_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          EOF
+
+      - name: Seed raw_places
+        run: node scripts/seed-raw-places.js --area ${{ github.event.inputs.area }}
+
+      - name: Run comparison (Hudson Yards only)
+        if: github.event.inputs.area == 'hudson_yards'
+        run: node scripts/compare-hudson-yards.js --save
+
+      - name: Upload comparison report
+        if: github.event.inputs.area == 'hudson_yards'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hudson-yards-compare-${{ github.run_number }}
+          path: scripts/output/hudson-yards-compare.json
+          retention-days: 30
