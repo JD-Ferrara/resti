@@ -1,0 +1,61 @@
+name: Filtered Places Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      area:
+        description: 'Area(s) to filter — single key, comma-separated, or "all"'
+        required: true
+        default: 'hudson_yards'
+        type: choice
+        options:
+          - hudson_yards
+          - chelsea
+          - hells_kitchen
+          - west_village
+          - soho
+          - lower_east_side
+          - tribeca
+          - flatiron
+          - all
+      dry_run:
+        description: 'Dry run (preview only, no DB writes)'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  run-filter:
+    name: Curated → AI Classify → filtered_places
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Write .env
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          echo "VITE_SUPABASE_URL=$VITE_SUPABASE_URL" >> .env
+          echo "SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY" >> .env
+          echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" >> .env
+
+      - name: Build filtered_places
+        run: |
+          ARGS="--area ${{ github.event.inputs.area }}"
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          node scripts/build-filtered-places.js $ARGS
