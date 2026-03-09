@@ -40,9 +40,16 @@ function sleep(ms) {
 
 // ── Core fetch ────────────────────────────────────────────
 
-async function fetchPage(apiKey, point, pageToken = null) {
+// Run two separate queries per circle — one for 'restaurant', one for 'bar'.
+// A combined query would let bars and restaurants compete for the same 60-result
+// quota, crowding out destination dining spots tagged as 'bar' (P.J. Clarke's,
+// Bronx Brewery Kitchen, La Barra, Greywind/Spygold, etc.).
+// Separate queries give each type its own 60-result budget.
+const PLACE_TYPE_QUERIES = [['restaurant'], ['bar']];
+
+async function fetchPage(apiKey, point, types, pageToken = null) {
   const body = {
-    includedTypes: ['restaurant'],
+    includedTypes: types,
     maxResultCount: MAX_RESULTS_PER_PAGE,
     locationRestriction: {
       circle: {
@@ -82,28 +89,32 @@ async function fetchPage(apiKey, point, pageToken = null) {
 
 async function fetchAllForPoint(apiKey, point, pointLabel) {
   const pointPlaces = [];
-  let pageToken = null;
-  let page = 1;
 
-  while (page <= MAX_PAGES) {
-    console.error(`     [${pointLabel}] Page ${page}/${MAX_PAGES}...`);
+  for (const types of PLACE_TYPE_QUERIES) {
+    const typeLabel = types.join('+');
+    let pageToken = null;
+    let page = 1;
 
-    if (pageToken) {
-      await sleep(2000);
+    while (page <= MAX_PAGES) {
+      console.error(`     [${pointLabel}/${typeLabel}] Page ${page}/${MAX_PAGES}...`);
+
+      if (pageToken) {
+        await sleep(2000);
+      }
+
+      const data = await fetchPage(apiKey, point, types, pageToken);
+      const places = data.places || [];
+
+      console.error(`     [${pointLabel}/${typeLabel}] Found ${places.length} results`);
+      pointPlaces.push(...places);
+
+      if (!data.nextPageToken || places.length < MAX_RESULTS_PER_PAGE) {
+        break;
+      }
+
+      pageToken = data.nextPageToken;
+      page++;
     }
-
-    const data = await fetchPage(apiKey, point, pageToken);
-    const places = data.places || [];
-
-    console.error(`     [${pointLabel}] Found ${places.length} results`);
-    pointPlaces.push(...places);
-
-    if (!data.nextPageToken || places.length < MAX_RESULTS_PER_PAGE) {
-      break;
-    }
-
-    pageToken = data.nextPageToken;
-    page++;
   }
 
   return pointPlaces;
