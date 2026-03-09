@@ -90,7 +90,8 @@ export const SEARCH_AREAS = {
 // ── Quality Filters ──────────────────────────────────────
 export const FILTERS = {
   minRating: 3.5,     // exclude anything rated below this
-  minReviews: 25,     // catches newer spots that haven't accumulated many reviews yet
+  minReviews: 10,     // lowered from 25 — newer HY openings (Limusina, etc.) may not
+                      // have accumulated many reviews yet
 };
 
 // ── Chain Exclusion List ─────────────────────────────────
@@ -157,6 +158,15 @@ export const EXCLUDED_CHAINS = new Set([
   'Outback Steakhouse',
   'Buffalo Wild Wings',
   "Hooters",
+
+  // Bar chains / generic sports bars (added when 'bar' type included in search)
+  "Dave & Buster's",
+  'Buffalo Wild Wings',
+  'Twin Peaks',
+  'Yard House',
+  'Bar Louie',
+  "Applebee's Bar & Grill",
+  'World of Beer',
 ]);
 
 // ── Destination QSR Allowlist ────────────────────────────
