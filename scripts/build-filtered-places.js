@@ -154,60 +154,78 @@ async function truncateFilteredPlaces(supabase, dryRun) {
 async function insertExistingRestaurants(supabase, dryRun) {
   console.log('[2/5] Inserting existing curated restaurants...');
 
-  // Get all google_place_ids that exist in raw_places
-  const { data: rawPlacesRows, error: rawErr } = await supabase
-    .from('raw_places')
-    .select('google_place_id');
-  if (rawErr) throw new Error(`Failed to fetch raw_places IDs: ${rawErr.message}`);
-  const rawPlacesIdSet = new Set(rawPlacesRows.map(r => r.google_place_id));
-
-  // Get all curated restaurants
+  // Get all curated restaurants (curated-only fields + the join key)
   const { data: restaurants, error: restErr } = await supabase
     .from('restaurants')
-    .select('*');
+    .select('google_place_id, cuisine, notes, instagram, reservation');
   if (restErr) throw new Error(`Failed to fetch restaurants: ${restErr.message}`);
 
-  // Match: restaurants that have a google_place_id found in raw_places
-  const matched = restaurants.filter(
-    r => r.google_place_id && rawPlacesIdSet.has(r.google_place_id)
+  const curatedIds = restaurants
+    .filter(r => r.google_place_id)
+    .map(r => r.google_place_id);
+
+  if (curatedIds.length === 0) {
+    console.log('  ⚠️  No curated restaurants have a google_place_id yet.\n');
+    return 0;
+  }
+
+  // Get Google data for those IDs from raw_places
+  const { data: rawRows, error: rawErr } = await supabase
+    .from('raw_places')
+    .select(
+      'google_place_id, name, address, district, neighborhood_area, ' +
+      'price_level, hours, phone, website, google_types, editorial_summary'
+    )
+    .in('google_place_id', curatedIds);
+  if (rawErr) throw new Error(`Failed to fetch raw_places for existing restaurants: ${rawErr.message}`);
+
+  const rawByPlaceId = Object.fromEntries(rawRows.map(r => [r.google_place_id, r]));
+
+  // Curated lookup map
+  const curatedByPlaceId = Object.fromEntries(
+    restaurants.filter(r => r.google_place_id).map(r => [r.google_place_id, r])
   );
-  const unmatched = restaurants.filter(
-    r => !r.google_place_id || !rawPlacesIdSet.has(r.google_place_id)
-  );
+
+  const matched  = curatedIds.filter(id => rawByPlaceId[id]);
+  const unmatched = curatedIds.filter(id => !rawByPlaceId[id]);
 
   console.log(`  Curated restaurants total:   ${restaurants.length}`);
   console.log(`  Matched to raw_places:       ${matched.length}`);
   if (unmatched.length > 0) {
     console.log(`  ⚠️  No raw_places match:      ${unmatched.length}`);
-    for (const r of unmatched) {
-      console.log(`     · ${r.name} (google_place_id: ${r.google_place_id ?? 'null'})`);
+    for (const id of unmatched) {
+      console.log(`     · google_place_id: ${id}`);
     }
   }
 
   if (matched.length === 0) {
-    console.log('  ⚠️  No existing restaurants to insert (IDs not yet linked).\n');
+    console.log('  ⚠️  No existing restaurants to insert (IDs not yet in raw_places).\n');
     return 0;
   }
 
-  // Build filtered_places rows from curated restaurant data
-  const rows = matched.map(r => ({
-    google_places_id:   r.google_place_id,
-    name:               r.name,
-    address:            r.address,
-    district:           r.district,
-    area:               r.area,
-    cuisine:            r.cuisine,
-    notes:              r.notes,
-    price:              r.price,
-    hours:              r.hours,
-    phone:              r.phone,
-    website:            r.website,
-    instagram:          r.instagram,
-    reservation:        r.reservation,
-    google_types:       r.google_types,
-    editorial_summary:  r.editorial_summary,
-    source_status:      'existing',
-  }));
+  // Build rows: Google fields from raw_places, curated fields from restaurants
+  const rows = matched.map(id => {
+    const rp = rawByPlaceId[id];
+    const cur = curatedByPlaceId[id];
+    return {
+      google_places_id:   id,
+      name:               rp.name,
+      address:            rp.address,
+      district:           rp.district,
+      area:               rp.neighborhood_area,
+      cuisine:            cur.cuisine,
+      notes:              cur.notes,
+      price:              rp.price_level,
+      hours:              rp.hours,
+      phone:              rp.phone,
+      website:            rp.website,
+      instagram:          cur.instagram,
+      reservation:        cur.reservation,
+      google_types:       rp.google_types,
+      editorial_summary:  rp.editorial_summary,
+      source_status:      'existing',
+    };
+  });
 
   if (dryRun) {
     console.log(`  [DRY RUN] Would insert ${rows.length} existing restaurants.\n`);
@@ -303,7 +321,7 @@ async function classifyBatch(anthropic, batch, batchLabel) {
   let response;
   try {
     response = await anthropic.messages.create({
-      model: 'claude-opus-4-6',
+      model: 'claude-sonnet-4-6',
       max_tokens: 4096,
       system: CLASSIFICATION_SYSTEM_PROMPT,
       messages: [{ role: 'user', content: userMessage }],
