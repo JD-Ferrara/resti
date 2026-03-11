@@ -1,7 +1,7 @@
 // ============================================================
 // seed-raw-places.js — Upsert filtered places into Supabase raw_places
 // ============================================================
-// Runs the full pipeline (fetch → filter → neighborhood → NTA clip) for one
+// Runs the full pipeline (fetch → filter → neighborhood → polygon clip) for one
 // or more areas, then upserts results into the raw_places staging table.
 //
 // Requires SUPABASE_SERVICE_ROLE_KEY (not the anon key) for server-side writes.
@@ -14,9 +14,11 @@
 
 import 'dotenv/config';
 import { createClient } from '@supabase/supabase-js';
+import booleanPointInPolygon from '@turf/boolean-point-in-polygon';
+import { point } from '@turf/helpers';
 import { fetchAllPlaces } from './fetch-places.js';
 import { filterPlaces, getDisplayName, normalizePriceLevel } from './filter-places.js';
-import { enrichWithNeighborhood } from './detect-neighborhood.js';
+import { enrichWithNeighborhood, getCustomDistrictsGeoJSON } from './detect-neighborhood.js';
 import { SEARCH_AREAS } from './places-config.js';
 
 // ── Supabase client (service role for writes) ─────────────
@@ -61,10 +63,71 @@ function resolveAreaKeys(areaArg) {
   return keys;
 }
 
-// ── Bounding box clip ─────────────────────────────────────
-// Primary geographic filter. Uses the raw lat/lng from Google Places — no
-// GeoJSON fetch required. If an area has no bounds defined, all places pass.
-// This runs before NTA clipping and is the authoritative geographic gate.
+// ── Polygon clip ──────────────────────────────────────────
+// Primary geographic filter. Uses the custom district geofence polygon from
+// scripts/data/custom-districts.geojson for authoritative geographic gating.
+// Falls back to bounding box clipping if no polygon is found for the area.
+
+function clipToPolygon(enriched, areaConfig) {
+  const { districtName, name, bounds } = areaConfig;
+  const customGeojson = getCustomDistrictsGeoJSON();
+
+  // Find the matching polygon feature
+  const feature = customGeojson?.features?.find(
+    (f) => f.properties.Name === districtName
+  );
+
+  if (!feature) {
+    // Polygon not found — fall back to bounding box
+    if (bounds) {
+      console.log(`  ⚠️  No geofence polygon found for "${districtName}". Falling back to bounding box.`);
+      return clipToBounds(enriched, areaConfig);
+    }
+    // No bounds either — pass everything through
+    console.log(`  ⚠️  No geofence polygon or bounds for "${districtName}". Skipping geographic clip.`);
+    return { clipped: enriched, outOfBounds: [] };
+  }
+
+  const clipped = [];
+  const outOfBounds = [];
+
+  for (const place of enriched) {
+    const lat = place.location?.latitude;
+    const lng = place.location?.longitude;
+
+    if (lat == null || lng == null) {
+      outOfBounds.push({
+        place,
+        reason: 'no_coordinates',
+        detail: `${getDisplayName(place)} — missing coordinates`,
+      });
+      continue;
+    }
+
+    const pt = point([lng, lat]);
+    let inside = false;
+    try {
+      inside = booleanPointInPolygon(pt, feature);
+    } catch {
+      // If polygon check throws, don't drop the place
+      inside = true;
+    }
+
+    if (inside) {
+      clipped.push(place);
+    } else {
+      outOfBounds.push({
+        place,
+        reason: 'outside_polygon',
+        detail: `${getDisplayName(place)} — (${lat.toFixed(4)}, ${lng.toFixed(4)}) outside ${name} geofence`,
+      });
+    }
+  }
+
+  return { clipped, outOfBounds };
+}
+
+// ── Bounding box clip (fallback) ──────────────────────────
 
 function clipToBounds(enriched, areaConfig) {
   const { bounds } = areaConfig;
@@ -129,6 +192,7 @@ function placeToRow(place, areaKey, { status = 'pending', exclusionReason = null
     editorial_summary:     place.editorialSummary?.text ?? null,
     district:              place.district ?? null,
     neighborhood_area:     place.neighborhood_area ?? null,
+    custom_district:       place.custom_district ?? null,
     search_area:           areaKey,
     is_permanently_closed: place.businessStatus === 'CLOSED_PERMANENTLY',
     last_pipeline_run:     new Date().toISOString(),
@@ -156,16 +220,19 @@ async function runArea(areaKey, supabase) {
   const { kept, excluded } = filterPlaces(raw);
   console.log(`  ✅ Kept: ${kept.length}  |  🚫 Excluded: ${excluded.length}`);
 
-  // 3. Neighborhood detection
+  // 3. Neighborhood detection (NTA + custom district polygon)
   console.log(`\n[3/4] Detecting neighborhoods...`);
   const enriched = await enrichWithNeighborhood(kept);
 
-  // 3b. Bounding box clip — drop anything outside the area's lat/lng bounds
-  const { clipped, outOfBounds } = clipToBounds(enriched, areaConfig);
+  // 3b. Polygon clip — drop anything outside the area's custom geofence polygon
+  const { clipped, outOfBounds } = clipToPolygon(enriched, areaConfig);
   if (outOfBounds.length > 0) {
-    console.log(`  ✂️  Clipped ${outOfBounds.length} place(s) outside ${areaConfig.name} bounds`);
+    console.log(`  ✂️  Clipped ${outOfBounds.length} place(s) outside ${areaConfig.name} geofence`);
     for (const { detail } of outOfBounds) console.log(`     · ${detail}`);
   }
+
+  const customDistrictMatched = clipped.filter((p) => p.custom_district).length;
+  console.log(`  🗺  Custom district matched: ${customDistrictMatched}/${clipped.length}`);
 
   // 4. Upsert to Supabase
   const keptRows     = clipped.map((place) => placeToRow(place, areaKey, { status: 'pending' }));

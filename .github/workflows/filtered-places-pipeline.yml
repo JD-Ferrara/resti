@@ -11,12 +11,23 @@ on:
         options:
           - hudson_yards
           - chelsea
-          - hells_kitchen
+          - meatpacking
           - west_village
+          - greenwich_village
+          - hudson_square
           - soho
-          - lower_east_side
+          - noho
           - tribeca
+          - financial_district
+          - little_italy
+          - chinatown
+          - nolita
+          - lower_east_side
+          - union_square
+          - gramercy
           - flatiron
+          - nomad
+          - east_village
           - all
       dry_run:
         description: 'Dry run (preview only, no DB writes)'

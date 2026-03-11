@@ -6,27 +6,31 @@
 
 // ── Search Areas ─────────────────────────────────────────
 // Each area has:
+//   districtName  — matches the "Name" property in scripts/data/custom-districts.geojson.
+//                   Used for polygon-based geographic clipping (authoritative gate) and
+//                   stored as custom_district on each place.
 //   searchPoints  — array of {lat, lng, radius} circles, fetched independently
 //                   and merged+deduplicated. Multiple points defeat the 60-result cap.
 //   bounds        — {north, south, east, west} lat/lng bounding box.
-//                   Primary geographic filter — no external GeoJSON needed.
-//                   Any result outside this box is excluded.
+//                   Used for grid generation (Hudson Yards) and as a loose reference.
+//                   Geographic clipping now uses the custom polygon, not bounds.
 //   nta_names     — secondary label used for district/neighborhood_area enrichment.
-//                   NOT used for geographic clipping (bounds handles that).
+//                   NOT used for geographic clipping (polygon handles that).
 export const SEARCH_AREAS = {
   hudson_yards: {
     name: 'Hudson Yards',
+    districtName: 'Hudson Yards',
     // Fine-grained grid mode: auto-generates ~150m-radius circles across the entire
     // bounding box. With ≤5 restaurants per tiny circle, the 60-result cap is never
     // hit — every restaurant in the box is guaranteed to be returned regardless of
     // Google's ranking algorithm.
     gridStepMeters: 150,
-    // Tight bounding box around the HY development (28th–36th St, 9th–12th Ave).
     bounds: { north: 40.7570, south: 40.7440, east: -73.9940, west: -74.0145 },
     nta_names: ['Hudson Yards-Chelsea-Flat Iron-Union Square'],
   },
   chelsea: {
     name: 'Chelsea',
+    districtName: 'Chelsea',
     // 4-point grid covering 14th–30th St, 7th–11th Ave at 450m radius each.
     searchPoints: [
       { lat: 40.7410, lng: -74.0050, radius: 450 }, // SW — lower Chelsea / 10th Ave
@@ -37,50 +41,124 @@ export const SEARCH_AREAS = {
     bounds: { north: 40.7510, south: 40.7360, east: -73.9880, west: -74.0120 },
     nta_names: ['Chelsea', 'Hudson Yards-Chelsea-Flat Iron-Union Square'],
   },
-  hells_kitchen: {
-    name: "Hell's Kitchen",
-    searchPoints: [
-      { lat: 40.7565, lng: -73.9970, radius: 400 }, // South — 42nd–48th St
-      { lat: 40.7640, lng: -73.9970, radius: 400 }, // North — 50th–57th St
-    ],
-    bounds: { north: 40.7690, south: 40.7540, east: -73.9870, west: -74.0090 },
-    nta_names: ["Hell's Kitchen", 'Clinton'],
+  meatpacking: {
+    name: 'Meatpacking District',
+    districtName: 'Meatpacking',
+    searchPoints: [{ lat: 40.7403, lng: -74.0057, radius: 500 }],
+    bounds: { north: 40.7440, south: 40.7360, east: -73.9990, west: -74.0140 },
+    nta_names: ['West Village', 'Hudson Yards-Chelsea-Flat Iron-Union Square'],
   },
   west_village: {
     name: 'West Village',
+    districtName: 'West Village',
     searchPoints: [{ lat: 40.7337, lng: -74.0063, radius: 700 }],
     bounds: { north: 40.7400, south: 40.7255, east: -73.9970, west: -74.0170 },
     nta_names: ['West Village', 'Greenwich Village-West'],
   },
+  greenwich_village: {
+    name: 'Greenwich Village',
+    districtName: 'Greenwich Village',
+    searchPoints: [{ lat: 40.7308, lng: -74.0000, radius: 700 }],
+    bounds: { north: 40.7375, south: 40.7230, east: -73.9880, west: -74.0120 },
+    nta_names: ['Greenwich Village', 'Greenwich Village-West'],
+  },
+  hudson_square: {
+    name: 'Hudson Square',
+    districtName: 'Hudson Square',
+    searchPoints: [{ lat: 40.7265, lng: -74.0082, radius: 600 }],
+    bounds: { north: 40.7310, south: 40.7180, east: -74.0000, west: -74.0190 },
+    nta_names: ['SoHo-TriBeCa-Civic Center-Little Italy', 'West Village'],
+  },
   soho: {
     name: 'SoHo',
+    districtName: 'Soho',
     searchPoints: [{ lat: 40.7233, lng: -74.0030, radius: 700 }],
     bounds: { north: 40.7280, south: 40.7170, east: -73.9960, west: -74.0110 },
     nta_names: ['SoHo-TriBeCa-Civic Center-Little Italy'],
   },
   noho: {
     name: 'NoHo / Greenwich Village',
+    districtName: 'NoHo',
     searchPoints: [{ lat: 40.7270, lng: -73.9950, radius: 650 }],
     bounds: { north: 40.7320, south: 40.7210, east: -73.9870, west: -74.0030 },
     nta_names: ['Greenwich Village', 'Greenwich Village-West', 'SoHo-TriBeCa-Civic Center-Little Italy'],
   },
-  lower_east_side: {
-    name: 'Lower East Side',
-    searchPoints: [{ lat: 40.7153, lng: -73.9862, radius: 700 }],
-    bounds: { north: 40.7230, south: 40.7080, east: -73.9770, west: -73.9970 },
-    nta_names: ['Lower East Side'],
-  },
   tribeca: {
     name: 'Tribeca',
+    districtName: 'Tribeca',
     searchPoints: [{ lat: 40.7163, lng: -74.0086, radius: 700 }],
     bounds: { north: 40.7230, south: 40.7090, east: -74.0000, west: -74.0190 },
     nta_names: ['SoHo-TriBeCa-Civic Center-Little Italy'],
   },
+  financial_district: {
+    name: 'Financial District',
+    districtName: 'Financial District',
+    searchPoints: [{ lat: 40.7074, lng: -74.0100, radius: 700 }],
+    bounds: { north: 40.7150, south: 40.7000, east: -74.0010, west: -74.0230 },
+    nta_names: ['Battery Park City-Lower Manhattan'],
+  },
+  little_italy: {
+    name: 'Little Italy',
+    districtName: 'Little Italy',
+    searchPoints: [{ lat: 40.7190, lng: -73.9975, radius: 450 }],
+    bounds: { north: 40.7230, south: 40.7150, east: -73.9930, west: -74.0040 },
+    nta_names: ['SoHo-TriBeCa-Civic Center-Little Italy'],
+  },
+  chinatown: {
+    name: 'Chinatown',
+    districtName: 'Chinatown',
+    searchPoints: [{ lat: 40.7155, lng: -73.9969, radius: 550 }],
+    bounds: { north: 40.7200, south: 40.7100, east: -73.9890, west: -74.0070 },
+    nta_names: ['Chinatown'],
+  },
+  nolita: {
+    name: 'NoLita',
+    districtName: 'NoLita',
+    searchPoints: [{ lat: 40.7226, lng: -73.9939, radius: 450 }],
+    bounds: { north: 40.7265, south: 40.7185, east: -73.9885, west: -74.0010 },
+    nta_names: ['SoHo-TriBeCa-Civic Center-Little Italy'],
+  },
+  lower_east_side: {
+    name: 'Lower East Side',
+    districtName: 'Lower East Side',
+    searchPoints: [{ lat: 40.7153, lng: -73.9862, radius: 700 }],
+    bounds: { north: 40.7230, south: 40.7080, east: -73.9770, west: -73.9970 },
+    nta_names: ['Lower East Side'],
+  },
+  union_square: {
+    name: 'Union Square',
+    districtName: 'Union Square',
+    searchPoints: [{ lat: 40.7358, lng: -73.9903, radius: 600 }],
+    bounds: { north: 40.7420, south: 40.7290, east: -73.9800, west: -74.0010 },
+    nta_names: ['Hudson Yards-Chelsea-Flat Iron-Union Square'],
+  },
+  gramercy: {
+    name: 'Gramercy',
+    districtName: 'Gramercy',
+    searchPoints: [{ lat: 40.7372, lng: -73.9838, radius: 600 }],
+    bounds: { north: 40.7450, south: 40.7290, east: -73.9750, west: -73.9940 },
+    nta_names: ['Stuyvesant Town-Cooper Village', 'Gramercy'],
+  },
   flatiron: {
     name: 'Flatiron',
+    districtName: 'Flatiron',
     searchPoints: [{ lat: 40.7410, lng: -73.9897, radius: 700 }],
     bounds: { north: 40.7460, south: 40.7350, east: -73.9810, west: -74.0000 },
     nta_names: ['Flatiron', 'Hudson Yards-Chelsea-Flat Iron-Union Square'],
+  },
+  nomad: {
+    name: 'NoMad',
+    districtName: 'NoMad',
+    searchPoints: [{ lat: 40.7450, lng: -73.9878, radius: 600 }],
+    bounds: { north: 40.7510, south: 40.7385, east: -73.9770, west: -73.9990 },
+    nta_names: ['Hudson Yards-Chelsea-Flat Iron-Union Square', 'Flatiron'],
+  },
+  east_village: {
+    name: 'East Village',
+    districtName: 'East Village',
+    searchPoints: [{ lat: 40.7265, lng: -73.9820, radius: 700 }],
+    bounds: { north: 40.7340, south: 40.7180, east: -73.9730, west: -73.9950 },
+    nta_names: ['East Village'],
   },
 };
 
@@ -246,4 +324,7 @@ export const NEIGHBORHOOD_AREA_MAP = {
   'Williamsburg':          'Williamsburg',
   'Greenpoint':            'Greenpoint',
   'DUMBO-Vinegar Hill-Downtown Brooklyn-Boerum Hill': 'DUMBO / Brooklyn Heights',
+  'Greenwich Village':     'Greenwich Village',
+  'East Village':          'East Village',
+  'Battery Park City-Lower Manhattan': 'Financial District',
 };
