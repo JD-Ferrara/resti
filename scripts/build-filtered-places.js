@@ -61,7 +61,9 @@ const CLASSIFICATION_TOOL = {
 // ── Claude system prompt ───────────────────────────────────
 const CLASSIFICATION_SYSTEM_PROMPT = `\
 You are a restaurant curation expert for a premium NYC neighborhood dining guide covering
-Hudson Yards, Manhattan West, Chelsea, Hell's Kitchen, and surrounding neighborhoods.
+19 Manhattan neighborhoods: Hudson Yards, Chelsea, Meatpacking District, West Village,
+Greenwich Village, Hudson Square, SoHo, NoHo, Tribeca, Financial District, Little Italy,
+Chinatown, NoLita, Lower East Side, Union Square, Gramercy, Flatiron, NoMad, and East Village.
 
 Your task is to evaluate candidate restaurants and decide whether each one belongs in a
 curated, editorial-quality dining guide that locals and visitors use to find great meals.
@@ -173,7 +175,7 @@ async function insertExistingRestaurants(supabase, dryRun) {
   const { data: rawRows, error: rawErr } = await supabase
     .from('raw_places')
     .select(
-      'google_place_id, name, address, district, neighborhood_area, ' +
+      'google_place_id, name, address, district, neighborhood_area, custom_district, ' +
       'price_level, hours, phone, website, google_types, editorial_summary'
     )
     .in('google_place_id', curatedIds);
@@ -213,6 +215,7 @@ async function insertExistingRestaurants(supabase, dryRun) {
       address:            rp.address,
       district:           rp.district,
       area:               rp.neighborhood_area,
+      custom_district:    rp.custom_district,
       cuisine:            cur.cuisine,
       notes:              cur.notes,
       price:              rp.price_level,
@@ -263,7 +266,7 @@ async function getCandidates(supabase, areaFilter) {
   let query = supabase
     .from('raw_places')
     .select(
-      'google_place_id, name, address, district, neighborhood_area, ' +
+      'google_place_id, name, address, district, neighborhood_area, custom_district, ' +
       'google_types, editorial_summary, price_level, price_range, ' +
       'google_rating, google_review_count, phone, website, hours, ' +
       'business_status, search_area'
@@ -423,6 +426,7 @@ async function insertApprovedCandidates(supabase, candidates, classifications, d
         address:            raw.address,
         district:           raw.district,
         area:               raw.neighborhood_area,
+        custom_district:    raw.custom_district,
         cuisine:            null,   // not available from raw_places; fill in later via enrichment
         notes:              null,   // not available from raw_places; editorial to be added
         price:              raw.price_level,

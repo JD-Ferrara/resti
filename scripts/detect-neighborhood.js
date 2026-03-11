@@ -1,12 +1,14 @@
 // ============================================================
 // detect-neighborhood.js — turf.js point-in-polygon neighborhood detection
 // ============================================================
-// For each Place, checks its lat/lng against NYC Open Data's
-// Neighborhood Tabulation Area (NTA) GeoJSON boundaries to determine:
-//   · district         — fine-grained NTA name (e.g. "Chelsea")
-//   · neighborhood_area — broader grouping (e.g. "Chelsea / Midtown West")
+// For each Place, checks its lat/lng against:
+//   1. scripts/data/custom-districts.geojson — custom V1 district polygons.
+//      Returns custom_district (the district Name from the GeoJSON).
+//   2. NYC Open Data NTA GeoJSON boundaries (cached) — returns:
+//      · district         — fine-grained NTA name (e.g. "Chelsea")
+//      · neighborhood_area — broader grouping (e.g. "Chelsea / Midtown West")
 //
-// GeoJSON is fetched once from NYC Open Data and cached locally at
+// NYC GeoJSON is fetched once from NYC Open Data and cached locally at
 // scripts/cache/nyc-neighborhoods.geojson to avoid repeated network calls.
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
@@ -16,6 +18,57 @@ import booleanPointInPolygon from '@turf/boolean-point-in-polygon';
 import { point } from '@turf/helpers';
 import { NEIGHBORHOOD_AREA_MAP } from './places-config.js';
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// ── Custom districts GeoJSON (local) ─────────────────────
+
+const CUSTOM_DISTRICTS_PATH = join(__dirname, 'data', 'custom-districts.geojson');
+
+let _customDistrictsCache = null;
+
+export function getCustomDistrictsGeoJSON() {
+  if (_customDistrictsCache) return _customDistrictsCache;
+  try {
+    _customDistrictsCache = JSON.parse(readFileSync(CUSTOM_DISTRICTS_PATH, 'utf-8'));
+    return _customDistrictsCache;
+  } catch (err) {
+    console.error(`   ⚠️  Could not load custom districts GeoJSON: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Detect which custom district a lat/lng falls within.
+ * Uses scripts/data/custom-districts.geojson — local file, no network call.
+ *
+ * @param {number} lat
+ * @param {number} lng
+ * @param {Object} customGeojson - FeatureCollection from custom-districts.geojson
+ * @returns {string|null} The district Name (e.g. "Hudson Yards"), or null if outside all polygons
+ */
+export function detectCustomDistrict(lat, lng, customGeojson) {
+  if (!customGeojson) return null;
+
+  const pt = point([lng, lat]); // turf uses [lng, lat] (GeoJSON order)
+
+  for (const feature of customGeojson.features) {
+    try {
+      if (booleanPointInPolygon(pt, feature)) {
+        return feature.properties.Name ?? null;
+      }
+    } catch {
+      // Skip malformed features
+    }
+  }
+
+  return null;
+}
+
+// ── NYC NTA GeoJSON (remote, cached) ─────────────────────
+
+const CACHE_DIR = join(__dirname, 'cache');
+const CACHE_PATH = join(CACHE_DIR, 'nyc-neighborhoods.geojson');
+
 // Multiple candidate URLs — tried in order until one succeeds.
 // NYC Open Data changes their export endpoints periodically.
 const NYC_GEOJSON_URLS = [
@@ -24,12 +77,6 @@ const NYC_GEOJSON_URLS = [
   // 2020 NTA — updated dataset
   'https://data.cityofnewyork.us/resource/9nt8-h7nd.geojson?$limit=5000',
 ];
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const CACHE_DIR = join(__dirname, 'cache');
-const CACHE_PATH = join(CACHE_DIR, 'nyc-neighborhoods.geojson');
-
-// ── GeoJSON loading ───────────────────────────────────────
 
 async function loadNycGeoJSON() {
   if (existsSync(CACHE_PATH)) {
@@ -67,7 +114,7 @@ async function loadNycGeoJSON() {
   return null;
 }
 
-// ── Neighborhood lookup ───────────────────────────────────
+// ── NTA neighborhood lookup ───────────────────────────────
 
 /**
  * Extract NTA name from a GeoJSON feature's properties.
@@ -111,28 +158,31 @@ export function detectNeighborhood(lat, lng, geojson) {
 
 /**
  * Enrich an array of filtered Places with neighborhood data.
+ * Sets district, neighborhood_area (from NYC Open Data NTA) and
+ * custom_district (from scripts/data/custom-districts.geojson).
  *
  * @param {Object[]} places - Filtered places from filter-places.js
- * @returns {Promise<Object[]>} Places with district + neighborhood_area added
+ * @returns {Promise<Object[]>} Places with district, neighborhood_area, and custom_district added
  */
 export async function enrichWithNeighborhood(places) {
   const geojson = await loadNycGeoJSON();
-
-  if (!geojson) {
-    // GeoJSON unavailable — return places as-is with null district fields
-    return places.map((place) => ({ ...place, district: null, neighborhood_area: null }));
-  }
+  const customGeojson = getCustomDistrictsGeoJSON();
 
   return places.map((place) => {
     const lat = place.location?.latitude;
     const lng = place.location?.longitude;
 
     if (!lat || !lng) {
-      return { ...place, district: null, neighborhood_area: null };
+      return { ...place, district: null, neighborhood_area: null, custom_district: null };
     }
 
-    const { district, neighborhood_area } = detectNeighborhood(lat, lng, geojson);
-    return { ...place, district, neighborhood_area };
+    const { district, neighborhood_area } = geojson
+      ? detectNeighborhood(lat, lng, geojson)
+      : { district: null, neighborhood_area: null };
+
+    const custom_district = detectCustomDistrict(lat, lng, customGeojson);
+
+    return { ...place, district, neighborhood_area, custom_district };
   });
 }
 
@@ -149,7 +199,9 @@ if (process.stdin.isTTY === false || process.argv[1]?.includes('detect-neighborh
       const enriched = await enrichWithNeighborhood(places);
 
       const found = enriched.filter((p) => p.district).length;
-      console.error(`   ✅ Matched: ${found}/${enriched.length} places to a neighborhood\n`);
+      const customFound = enriched.filter((p) => p.custom_district).length;
+      console.error(`   ✅ NTA matched:            ${found}/${enriched.length} places`);
+      console.error(`   ✅ Custom district matched: ${customFound}/${enriched.length} places\n`);
 
       process.stdout.write(JSON.stringify(enriched, null, 2));
     } catch (err) {
