@@ -15,7 +15,7 @@ import 'dotenv/config';
 import { writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { SEARCH_AREAS, PLACES_FIELD_MASK } from './places-config.js';
+import { SEARCH_AREAS, PLACES_DISCOVERY_FIELD_MASK } from './places-config.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUTPUT_DIR = join(__dirname, 'output');
@@ -72,7 +72,7 @@ async function fetchPage(apiKey, point, types, pageToken = null) {
     headers: {
       'Content-Type': 'application/json',
       'X-Goog-Api-Key': apiKey,
-      'X-Goog-FieldMask': PLACES_FIELD_MASK,
+      'X-Goog-FieldMask': PLACES_DISCOVERY_FIELD_MASK,
     },
     body: JSON.stringify(body),
   });
@@ -153,7 +153,7 @@ async function fetchTextPage(apiKey, query, bounds, pageToken = null) {
     headers: {
       'Content-Type': 'application/json',
       'X-Goog-Api-Key': apiKey,
-      'X-Goog-FieldMask': PLACES_FIELD_MASK,
+      'X-Goog-FieldMask': PLACES_DISCOVERY_FIELD_MASK,
     },
     body: JSON.stringify(body),
   });

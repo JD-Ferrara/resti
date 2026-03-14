@@ -1,16 +1,21 @@
-name: "Places Pipeline — Step 1: Discover + Filter"
-# Fetches minimal place data (id, name, location, rating, review count, types)
-# for the selected area(s), applies local filters (geofence, rating, chain
-# exclusion), and upserts only qualifying rows to raw_places with status=pending.
+name: "Places Pipeline — Step 3: Enrich approved"
+# For each Claude-approved candidate in filtered_places (source_status = ai_candidate),
+# calls Place Details (New) to populate atmosphere + contact fields in raw_places:
+#   phone, website, hours, outdoor seating, reservations, serves_*,
+#   takeout, delivery, dineIn, photos.
 #
-# Run Step 2 (enrich-raw-places.yml) after reviewing the pending results to
-# populate the full atmosphere + contact fields via Place Details (New) API.
+# Run ORDER: Step 1 (places-pipeline.yml) → Step 2 (filtered-places-pipeline.yml) → this.
+#
+# Why AFTER Claude, not before: Claude's classifier only uses name, address,
+# google_types, editorial_summary, price_level, and rating — all fetched in
+# Step 1. Enriching atmosphere fields before Claude would waste Place Details
+# calls on places Claude will exclude (~70-80% of candidates).
 
 on:
   workflow_dispatch:
     inputs:
       area:
-        description: 'Area(s) to fetch — single key, comma-separated, or "all"'
+        description: 'Area(s) to enrich — single key, comma-separated, or "all"'
         required: true
         default: 'hudson_yards'
         type: choice
@@ -37,8 +42,8 @@ on:
           - all
 
 jobs:
-  run-pipeline:
-    name: "Step 1: Discover → Filter → Seed pending"
+  enrich:
+    name: "Step 3: Enrich approved → Place Details"
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -66,17 +71,5 @@ jobs:
           echo "GOOGLE_PLACES_API_KEY=$GOOGLE_PLACES_API_KEY" >> .env
           echo "SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY" >> .env
 
-      - name: "Step 1 — Discover + filter (seed-raw-places.js)"
-        run: node scripts/seed-raw-places.js --area ${{ github.event.inputs.area }}
-
-      - name: Run comparison (Hudson Yards only)
-        if: github.event.inputs.area == 'hudson_yards'
-        run: node scripts/compare-hudson-yards.js --save
-
-      - name: Upload comparison report
-        if: github.event.inputs.area == 'hudson_yards'
-        uses: actions/upload-artifact@v4
-        with:
-          name: hudson-yards-compare-${{ github.run_number }}
-          path: scripts/output/hudson-yards-compare.json
-          retention-days: 30
+      - name: "Step 3 — Enrich approved candidates (enrich-raw-places.js)"
+        run: node scripts/enrich-raw-places.js --area ${{ github.event.inputs.area }}

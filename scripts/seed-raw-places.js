@@ -1,8 +1,13 @@
 // ============================================================
-// seed-raw-places.js — Upsert filtered places into Supabase raw_places
+// seed-raw-places.js — Step 1: Discover + Filter → raw_places
 // ============================================================
-// Runs the full pipeline (fetch → filter → neighborhood → polygon clip) for one
-// or more areas, then upserts results into the raw_places staging table.
+// Runs the discovery pipeline (fetch → filter → neighborhood → polygon clip)
+// for one or more areas, then upserts only the qualifying rows into raw_places
+// with status = 'pending'. Excluded places are NOT stored.
+//
+// This is Step 1 of a two-step pipeline:
+//   Step 1 (this script): fetch minimal fields, apply local filters, store pending.
+//   Step 2 (enrich-raw-places.js): fetch full Place Details for pending rows only.
 //
 // Requires SUPABASE_SERVICE_ROLE_KEY (not the anon key) for server-side writes.
 // Uses upsert on google_place_id, so re-running is safe.
@@ -234,32 +239,41 @@ async function runArea(areaKey, supabase) {
   const customDistrictMatched = clipped.filter((p) => p.custom_district).length;
   console.log(`  🗺  Custom district matched: ${customDistrictMatched}/${clipped.length}`);
 
-  // 4. Upsert to Supabase
-  const keptRows     = clipped.map((place) => placeToRow(place, areaKey, { status: 'pending' }));
-  const excludedRows = [
-    ...excluded.map(({ place, reason }) => placeToRow(place, areaKey, { status: 'excluded', exclusionReason: reason })),
-    ...outOfBounds.map(({ place, reason }) => placeToRow(place, areaKey, { status: 'excluded', exclusionReason: reason })),
-  ];
-  const rows = [...keptRows, ...excludedRows];
+  // 4. Upsert pending rows + purge excluded rows from the table.
+  //    Excluded places are not written to raw_places — this keeps the table
+  //    clean for Step 2 enrichment. Any stale excluded rows from prior runs
+  //    for this area are deleted so they don't accumulate.
+  const keptRows = clipped.map((place) => placeToRow(place, areaKey, { status: 'pending' }));
+  const totalExcluded = excluded.length + outOfBounds.length;
 
-  console.log(`\n[4/4] Upserting ${rows.length} rows (${keptRows.length} pending, ${excludedRows.length} excluded)...`);
+  // Delete any previously-excluded rows for this area (cleanup from prior runs)
+  console.log(`\n[4/4] Purging stale excluded rows for ${areaConfig.name}...`);
+  const { error: deleteError } = await supabase
+    .from('raw_places')
+    .delete()
+    .eq('search_area', areaKey)
+    .eq('status', 'excluded');
+  if (deleteError) throw new Error(`Supabase delete failed: ${deleteError.message}`);
+
+  // Upsert only the pending rows
+  console.log(`  Upserting ${keptRows.length} pending rows (${totalExcluded} excluded — not stored)...`);
 
   const BATCH_SIZE = 50;
   let upserted = 0;
 
-  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-    const batch = rows.slice(i, i + BATCH_SIZE);
+  for (let i = 0; i < keptRows.length; i += BATCH_SIZE) {
+    const batch = keptRows.slice(i, i + BATCH_SIZE);
     const { error } = await supabase
       .from('raw_places')
       .upsert(batch, { onConflict: 'google_place_id' });
 
     if (error) throw new Error(`Supabase upsert failed: ${error.message}`);
     upserted += batch.length;
-    console.log(`  Upserted ${upserted}/${rows.length}...`);
+    console.log(`  Upserted ${upserted}/${keptRows.length}...`);
   }
 
-  console.log(`\n  ✅ Done — ${keptRows.length} pending, ${excludedRows.length} excluded\n`);
-  return { areaKey, pending: keptRows.length, excluded: excludedRows.length };
+  console.log(`\n  ✅ Done — ${keptRows.length} pending (ready for Step 2 enrichment), ${totalExcluded} excluded (discarded)\n`);
+  return { areaKey, pending: keptRows.length, excluded: totalExcluded };
 }
 
 // ── Main ──────────────────────────────────────────────────
