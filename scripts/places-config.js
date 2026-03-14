@@ -262,31 +262,24 @@ export const DESTINATION_QSR = new Set([
   'Smash Burger',           // not the chain — hypothetical standalone
 ]);
 
-// ── Google Places Field Masks ────────────────────────────
-// Two-tier fetching strategy to minimise API cost:
+// ── Google Places Field Mask ─────────────────────────────
+// Controls which fields are returned by Nearby Search + Text Search requests.
+// Requesting higher-tier fields on every search request is the main cost driver,
+// so this mask is kept to the minimum needed for:
+//   (a) local filtering: geofence, rating, review count, chain exclusion
+//   (b) Claude classification: name, address, types, price, editorial summary, rating
 //
-//   Step 1 — DISCOVERY (seed-raw-places.js)
-//     Use PLACES_DISCOVERY_FIELD_MASK in Nearby Search + Text Search requests.
-//     Requests only the fields required to apply local filters (geofence, rating,
-//     review count, chain exclusion). Avoids the higher-priced Advanced/Preferred
-//     tiers for places that will be filtered out anyway.
+// All fields here are Basic or Advanced Data tier — no Preferred tier (no photos),
+// so there is no surcharge per request.
 //
-//   Step 2 — ENRICHMENT (enrich-raw-places.js)
-//     Use PLACES_ENRICH_FIELD_MASK in individual Place Details (New) requests,
-//     called only for rows that survived Step 1 (status = 'pending').
-//     Place Details (New) format omits the 'places.' prefix.
+// Note: raw_places has columns for atmosphere data (has_outdoor_seating, serves_beer,
+// serves_dinner, etc.) that are NOT currently populated. When the frontend adds
+// filters that depend on those fields (e.g. "outdoor seating", "serves dinner"),
+// add a Place Details enrichment step here targeting only the Claude-approved
+// filtered_places candidates. That step would use the Place Details (New) endpoint
+// with a separate field mask and would run after build-filtered-places.js.
 //
 // See: https://developers.google.com/maps/documentation/places/web-service/place-data-fields
-
-// Step 1: discovery fields — everything needed for local filtering AND for
-// Claude's classification decision. Stays in the Advanced Data tier:
-// rating, userRatingCount, editorialSummary, and priceLevel are all Advanced;
-// the rest are Basic. No photos = no Preferred tier surcharge.
-//
-// Claude's classifier uses: name, address, types, price level,
-// editorial summary, rating, and review count — all present here.
-// There is no cost benefit to omitting editorialSummary or priceLevel
-// since we're already billed at the Advanced tier due to rating/userRatingCount.
 export const PLACES_DISCOVERY_FIELD_MASK = [
   'places.id',
   'places.displayName',
@@ -298,31 +291,6 @@ export const PLACES_DISCOVERY_FIELD_MASK = [
   'places.types',
   'places.businessStatus',
   'places.editorialSummary',
-].join(',');
-
-// Step 2: atmosphere + contact fields, requested via Place Details (New).
-// Called AFTER Claude classification — only for Claude-approved candidates
-// in filtered_places (typically 20-30% of the discovery population).
-// Place Details (New) fields omit the 'places.' prefix.
-// editorialSummary and priceLevel are intentionally excluded here since
-// they were already fetched in Step 1 and stored in raw_places.
-export const PLACES_ENRICH_FIELD_MASK = [
-  'id',
-  'websiteUri',
-  'nationalPhoneNumber',
-  'regularOpeningHours',
-  'currentOpeningHours',
-  'outdoorSeating',
-  'reservable',
-  'servesBeer',
-  'servesWine',
-  'servesBreakfast',
-  'servesLunch',
-  'servesDinner',
-  'takeout',
-  'delivery',
-  'dineIn',
-  'photos',
 ].join(',');
 
 // ── NYC GeoJSON ──────────────────────────────────────────

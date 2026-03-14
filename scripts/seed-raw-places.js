@@ -5,9 +5,8 @@
 // for one or more areas, then upserts only the qualifying rows into raw_places
 // with status = 'pending'. Excluded places are NOT stored.
 //
-// This is Step 1 of a two-step pipeline:
-//   Step 1 (this script): fetch minimal fields, apply local filters, store pending.
-//   Step 2 (enrich-raw-places.js): fetch full Place Details for pending rows only.
+// Step 2: run build-filtered-places.js to Claude-classify the pending rows
+// and populate filtered_places for human review before import to restaurants.
 //
 // Requires SUPABASE_SERVICE_ROLE_KEY (not the anon key) for server-side writes.
 // Uses upsert on google_place_id, so re-running is safe.
