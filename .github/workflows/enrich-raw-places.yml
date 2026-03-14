@@ -1,11 +1,15 @@
-name: "Places Pipeline — Step 2: Enrich pending"
-# For each raw_places row with status=pending in the selected area(s), calls the
-# Place Details (New) API to populate the full atmosphere + contact fields:
-#   price level, phone, website, hours, outdoor seating, reservations, serves_*,
-#   takeout, delivery, editorial summary, photos.
+name: "Places Pipeline — Step 3: Enrich approved"
+# For each Claude-approved candidate in filtered_places (source_status = ai_candidate),
+# calls Place Details (New) to populate atmosphere + contact fields in raw_places:
+#   phone, website, hours, outdoor seating, reservations, serves_*,
+#   takeout, delivery, dineIn, photos.
 #
-# Run this after Step 1 (places-pipeline.yml) and after reviewing the pending list.
-# Only pending rows are touched — already-enriched or excluded rows are not affected.
+# Run ORDER: Step 1 (places-pipeline.yml) → Step 2 (filtered-places-pipeline.yml) → this.
+#
+# Why AFTER Claude, not before: Claude's classifier only uses name, address,
+# google_types, editorial_summary, price_level, and rating — all fetched in
+# Step 1. Enriching atmosphere fields before Claude would waste Place Details
+# calls on places Claude will exclude (~70-80% of candidates).
 
 on:
   workflow_dispatch:
@@ -39,7 +43,7 @@ on:
 
 jobs:
   enrich:
-    name: "Step 2: Enrich pending → Place Details"
+    name: "Step 3: Enrich approved → Place Details"
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -67,5 +71,5 @@ jobs:
           echo "GOOGLE_PLACES_API_KEY=$GOOGLE_PLACES_API_KEY" >> .env
           echo "SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY" >> .env
 
-      - name: "Step 2 — Enrich pending rows (enrich-raw-places.js)"
+      - name: "Step 3 — Enrich approved candidates (enrich-raw-places.js)"
         run: node scripts/enrich-raw-places.js --area ${{ github.event.inputs.area }}

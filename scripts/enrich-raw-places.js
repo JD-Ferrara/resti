@@ -1,16 +1,24 @@
 // ============================================================
-// enrich-raw-places.js — Step 2: Enrich pending rows via Place Details (New)
+// enrich-raw-places.js — Step 3: Enrich Claude-approved places via Place Details (New)
 // ============================================================
-// Reads all raw_places rows with status = 'pending' for the given area(s),
-// calls the Place Details (New) API for each, and updates the row with the
-// full atmosphere + contact data.
+// Reads google_place_ids from filtered_places (the Claude-approved set),
+// calls the Place Details (New) API for each, and updates the corresponding
+// raw_places rows with atmosphere + contact data.
 //
-// This is Step 2 of a two-step pipeline:
-//   Step 1 (seed-raw-places.js): fetch minimal fields, apply local filters.
-//   Step 2 (this script):        enrich surviving rows with full Place Details.
+// Why run AFTER Claude classification (not before):
+//   Claude's classifier uses only: name, address, google_types, editorial_summary,
+//   price_level, rating, and review_count. All of these are already present in
+//   raw_places from Step 1. The atmosphere fields (outdoor seating, serves_beer,
+//   hours, phone, etc.) are NOT used by Claude's decision — enriching them before
+//   classification would waste Place Details calls on places Claude will exclude.
 //
-// By calling Place Details only for the ~30-40% of places that pass Step 1
-// filters, we avoid paying for enrichment data on places that would be excluded.
+// Pipeline order:
+//   Step 1 — seed-raw-places.js:       discover + local filter → raw_places (pending)
+//   Step 2 — build-filtered-places.js: Claude classify → filtered_places
+//   Step 3 — this script:              enrich raw_places for approved IDs only
+//
+// After enrichment, raw_places rows for approved places will have all atmosphere
+// data populated, ready for import into restaurants.
 //
 // Usage:
 //   node scripts/enrich-raw-places.js --area hudson_yards
@@ -83,13 +91,15 @@ async function fetchPlaceDetails(apiKey, googlePlaceId) {
 }
 
 // ── Map Place Details response to raw_places update ───────
+// Note: editorialSummary and priceLevel are intentionally excluded —
+// they were already fetched in Step 1 and should not be overwritten.
 
 function buildEnrichmentUpdate(details) {
   const { level, range } = normalizePriceLevel(details);
 
   return {
-    price_level:         level,
-    price_range:         range,
+    // Only overwrite price if Step 1 left it null (belt-and-suspenders)
+    ...(level !== null ? { price_level: level, price_range: range } : {}),
     phone:               details.nationalPhoneNumber ?? null,
     website:             details.websiteUri ?? null,
     hours:               details.regularOpeningHours ?? null,
@@ -102,7 +112,6 @@ function buildEnrichmentUpdate(details) {
     serves_dinner:       details.servesDinner ?? null,
     has_takeout:         details.takeout ?? null,
     has_delivery:        details.delivery ?? null,
-    editorial_summary:   details.editorialSummary?.text ?? null,
     raw_data:            details,
     fetched_at:          new Date().toISOString(),
   };
@@ -112,7 +121,7 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// ── Enrich all pending rows for one area ─────────────────
+// ── Enrich Claude-approved candidates for one area ────────
 
 async function enrichArea(areaKey, supabase, apiKey) {
   const areaConfig = SEARCH_AREAS[areaKey];
@@ -121,34 +130,49 @@ async function enrichArea(areaKey, supabase, apiKey) {
   console.log(`  ${areaConfig.name}`);
   console.log(`${'═'.repeat(56)}`);
 
-  // 1. Fetch pending rows for this area
-  console.log('\n[1/2] Fetching pending rows from Supabase...');
-  const { data: rows, error: fetchError } = await supabase
-    .from('raw_places')
-    .select('google_place_id, name')
-    .eq('search_area', areaKey)
-    .eq('status', 'pending');
+  // 1. Get Claude-approved IDs for this area from filtered_places.
+  //    filtered_places uses google_places_id (note the 's') as its column name.
+  console.log('\n[1/2] Fetching Claude-approved candidates from filtered_places...');
+  const { data: approved, error: approvedErr } = await supabase
+    .from('filtered_places')
+    .select('google_places_id, name')
+    .eq('source_status', 'ai_candidate');
 
-  if (fetchError) throw new Error(`Supabase fetch failed: ${fetchError.message}`);
+  if (approvedErr) throw new Error(`filtered_places fetch failed: ${approvedErr.message}`);
 
-  if (!rows || rows.length === 0) {
-    console.log(`  ⚠️  No pending rows found for ${areaConfig.name}. Run seed-raw-places.js first.`);
+  if (!approved || approved.length === 0) {
+    console.log(`  ⚠️  No ai_candidate rows in filtered_places. Run build-filtered-places.js first.`);
     return { areaKey, enriched: 0, failed: 0 };
   }
 
-  console.log(`  Found ${rows.length} pending row(s).`);
+  // Cross-reference with raw_places to limit to this area
+  const approvedIds = approved.map((r) => r.google_places_id);
+  const { data: areaRows, error: areaErr } = await supabase
+    .from('raw_places')
+    .select('google_place_id, name')
+    .in('google_place_id', approvedIds)
+    .eq('search_area', areaKey);
 
-  // 2. Fetch Place Details for each and update
+  if (areaErr) throw new Error(`raw_places lookup failed: ${areaErr.message}`);
+
+  if (!areaRows || areaRows.length === 0) {
+    console.log(`  ⚠️  No approved candidates found in raw_places for ${areaConfig.name}.`);
+    return { areaKey, enriched: 0, failed: 0 };
+  }
+
+  console.log(`  Found ${areaRows.length} Claude-approved candidate(s) to enrich.`);
+
+  // 2. Fetch Place Details for each and update raw_places
   console.log(`\n[2/2] Enriching via Place Details (New) API...`);
   let enriched = 0;
   let failed = 0;
 
-  for (let i = 0; i < rows.length; i++) {
-    const { google_place_id, name } = rows[i];
-    const label = `[${i + 1}/${rows.length}] ${name}`;
+  for (let i = 0; i < areaRows.length; i++) {
+    const { google_place_id, name } = areaRows[i];
+    const label = `[${i + 1}/${areaRows.length}] ${name}`;
 
     try {
-      // Polite rate limiting — Place Details doesn't paginate but avoid burst throttling
+      // Polite rate limiting — avoid burst throttling on Place Details endpoint
       if (i > 0) await sleep(200);
 
       const details = await fetchPlaceDetails(apiKey, google_place_id);
@@ -187,6 +211,7 @@ async function run() {
   const supabase = getSupabase();
 
   console.log(`\n🔬 Enrichment pipeline — ${areaKeys.length} area(s): ${areaKeys.join(', ')}`);
+  console.log(`   Targeting Claude-approved candidates in filtered_places only.\n`);
 
   const results = [];
   for (const key of areaKeys) {
