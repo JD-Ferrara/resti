@@ -95,24 +95,35 @@ function urlToColumn(url) {
   return null;
 }
 
-// Returns true if this Tavily result is specifically about the restaurant
-// (not a generic "best restaurants in NYC" list that happens to mention it).
+// Returns true if this Tavily result is specifically about THIS restaurant
+// at THIS location (not a generic list page, and not a different location
+// of the same name).
 function isRestaurantSpecificResult(result, restaurant) {
-  const tokens = nameTokens(restaurant.name);
-  const urlPath = (() => {
-    try { return new URL(result.url).pathname.toLowerCase(); }
-    catch { return ''; }
-  })();
-  const titleLower = (result.title || '').toLowerCase();
+  const nTokens = nameTokens(restaurant.name);
+  const loc     = restaurant.area || restaurant.district || null;
+  const hasSpecificLocation = !!loc;
 
-  // At least one meaningful name token must appear in the URL path OR the title.
-  // This filters out broad list pages while allowing review URLs like:
-  //   /new-york/reviews/ci-siamo   →  "ci" + "siamo" both present → pass
-  //   /best-restaurants-nyc        →  no token → fail
-  const pathMatch  = tokens.some(t => urlPath.includes(t));
-  const titleMatch = tokens.some(t => titleLower.includes(t));
+  const urlPath     = (() => { try { return new URL(result.url).pathname.toLowerCase(); } catch { return ''; } })();
+  const titleLower  = (result.title   || '').toLowerCase();
+  const contentLower = (result.content || '').toLowerCase();
 
-  return pathMatch || titleMatch;
+  // 1. Name must appear in URL path OR title (filters generic list pages)
+  const nameInPath  = nTokens.some(t => urlPath.includes(t));
+  const nameInTitle = nTokens.some(t => titleLower.includes(t));
+  if (!nameInPath && !nameInTitle) return false;
+
+  // 2. For restaurants with a specific neighborhood (Hudson Yards, Manhattan West,
+  //    etc.) the location must appear somewhere in title OR content. This rejects
+  //    results about the same restaurant name at a different address.
+  if (hasSpecificLocation) {
+    const locTokens = loc.toLowerCase().split(/\s+/).filter(t => t.length > 3);
+    const locInTitle   = locTokens.some(t => titleLower.includes(t));
+    const locInContent = locTokens.some(t => contentLower.includes(t));
+    if (!locInTitle && !locInContent) return false;
+  }
+
+
+  return true;
 }
 
 // ── Tavily search ─────────────────────────────────────────
@@ -141,30 +152,18 @@ async function tavilySearch(query) {
 }
 
 // ── Build search query for a restaurant ───────────────────
-// Extracts a clean location hint from the address field.
-// "Level 4, 20 Hudson Yards" → "Hudson Yards"
-// "385 9th Ave, Manhattan West" → "Manhattan West"
-function locationHint(address) {
-  if (!address) return 'New York City';
-
-  // Common landmark areas
-  const landmarks = [
-    'Hudson Yards', 'Manhattan West', 'The Spiral',
-    'Chelsea', 'Meatpacking', 'West Village', 'Greenwich Village',
-    'SoHo', 'NoHo', 'Tribeca', 'Lower East Side',
-    'Union Square', 'Gramercy', 'Flatiron', 'NoMad', 'East Village',
-  ];
-  for (const lm of landmarks) {
-    if (address.includes(lm)) return lm;
-  }
-
-  return 'New York City';
-}
-
+// Uses the structured area column (most specific sub-area, e.g.
+// "Manhattan West") falling back to district ("Hudson Yards"),
+// then to the generic city. Both name and location are quoted so
+// Tavily requires both terms — anchoring results to this specific
+// location rather than other branches or events with the same name.
 function buildQuery(restaurant) {
-  const loc = locationHint(restaurant.address);
-  // Quoted name catches exact matches; location narrows to this city/area.
-  return `"${restaurant.name}" restaurant ${loc} New York review feature`;
+  const loc = restaurant.area || restaurant.district;
+  if (loc) {
+    // e.g. → "BondST" "Hudson Yards" restaurant New York review
+    return `"${restaurant.name}" "${loc}" restaurant New York review`;
+  }
+  return `"${restaurant.name}" restaurant New York City review feature`;
 }
 
 // ── Main ──────────────────────────────────────────────────
@@ -198,7 +197,7 @@ async function main() {
   // ── Load restaurants ──────────────────────────────────
   let restaurantQuery = supabase
     .from('restaurants')
-    .select('id, name, cuisine, address')
+    .select('id, name, cuisine, address, area, district')
     .order('id');
 
   if (targetId) restaurantQuery = restaurantQuery.eq('id', targetId);
