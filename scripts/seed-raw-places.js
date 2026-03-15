@@ -288,18 +288,17 @@ async function runArea(areaKey, supabase) {
   const customDistrictMatched = clipped.filter((p) => p.custom_district).length;
   console.log(`  🗺  Custom district matched: ${customDistrictMatched}/${clipped.length}`);
 
-  // 3c. Fetch editorial summaries via Place Details for filtered candidates only.
-  //     editorialSummary is Preferred (Atmosphere) tier — fetching it here for
-  //     ~100-150 survivors instead of in the discovery mask (~572 requests) gives
-  //     ~4x cost reduction at scale. Merge the text back onto each place object.
-  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
-  const editorialMap = await enrichEditorialSummaries(clipped, apiKey);
-  const clippedWithEditorial = clipped.map((place) => ({
-    ...place,
-    editorialSummary: editorialMap.get(place.id)
-      ? { text: editorialMap.get(place.id) }
-      : undefined,
-  }));
+  // 3c. Editorial summary enrichment — temporarily disabled for billing tier test.
+  //     Re-enable once we confirm discovery bills at Enterprise (not Atmosphere).
+  // const apiKey = process.env.GOOGLE_PLACES_API_KEY;
+  // const editorialMap = await enrichEditorialSummaries(clipped, apiKey);
+  // const clippedWithEditorial = clipped.map((place) => ({
+  //   ...place,
+  //   editorialSummary: editorialMap.get(place.id)
+  //     ? { text: editorialMap.get(place.id) }
+  //     : undefined,
+  // }));
+  const clippedWithEditorial = clipped;
 
   // 4. Upsert pending rows + purge excluded rows from the table.
   //    Excluded places are not written to raw_places — this keeps the table
