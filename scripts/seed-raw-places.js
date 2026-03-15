@@ -23,7 +23,7 @@ import { point } from '@turf/helpers';
 import { fetchAllPlaces } from './fetch-places.js';
 import { filterPlaces, getDisplayName, normalizePriceLevel } from './filter-places.js';
 import { enrichWithNeighborhood, getCustomDistrictsGeoJSON } from './detect-neighborhood.js';
-import { SEARCH_AREAS } from './places-config.js';
+import { SEARCH_AREAS, PLACES_DETAILS_EDITORIAL_FIELD_MASK } from './places-config.js';
 
 // ── Supabase client (service role for writes) ─────────────
 
@@ -164,6 +164,56 @@ function clipToBounds(enriched, areaConfig) {
   return { clipped, outOfBounds };
 }
 
+// ── Editorial summary enrichment ──────────────────────────
+// Fetches editorialSummary via Place Details (New) for a filtered set of places.
+// This is called AFTER quality + geographic filtering so we only pay the
+// Preferred (Atmosphere) tier rate for the ~100-150 survivors, not all ~572
+// discovery results. At scale across 19 neighborhoods the savings are ~4x.
+
+const PLACE_DETAILS_BASE_URL = 'https://places.googleapis.com/v1/places';
+
+async function fetchEditorialSummary(apiKey, placeId) {
+  const res = await fetch(`${PLACE_DETAILS_BASE_URL}/${placeId}`, {
+    headers: {
+      'X-Goog-Api-Key': apiKey,
+      'X-Goog-FieldMask': PLACES_DETAILS_EDITORIAL_FIELD_MASK,
+    },
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    console.warn(`  ⚠️  Place Details error for ${placeId} (${res.status}): ${err.slice(0, 120)}`);
+    return null;
+  }
+
+  const data = await res.json();
+  return data.editorialSummary?.text ?? null;
+}
+
+async function enrichEditorialSummaries(places, apiKey) {
+  if (places.length === 0) return new Map();
+
+  console.log(`\n[3c/4] Fetching editorial summaries for ${places.length} filtered places...`);
+  const summaries = new Map();
+
+  for (let i = 0; i < places.length; i++) {
+    const place = places[i];
+    // Small delay to avoid rate limits — 50ms keeps throughput at ~20 req/s
+    if (i > 0) await new Promise((r) => setTimeout(r, 50));
+
+    const text = await fetchEditorialSummary(apiKey, place.id);
+    summaries.set(place.id, text);
+
+    if ((i + 1) % 25 === 0 || i + 1 === places.length) {
+      console.log(`  [${i + 1}/${places.length}] editorial summaries fetched`);
+    }
+  }
+
+  const withSummary = [...summaries.values()].filter(Boolean).length;
+  console.log(`  ✅ ${withSummary}/${places.length} places have an editorial summary`);
+  return summaries;
+}
+
 // ── Shape a Place into a raw_places row ───────────────────
 
 function placeToRow(place, areaKey, { status = 'pending', exclusionReason = null } = {}) {
@@ -238,11 +288,24 @@ async function runArea(areaKey, supabase) {
   const customDistrictMatched = clipped.filter((p) => p.custom_district).length;
   console.log(`  🗺  Custom district matched: ${customDistrictMatched}/${clipped.length}`);
 
+  // 3c. Fetch editorial summaries via Place Details for filtered candidates only.
+  //     editorialSummary is Preferred (Atmosphere) tier — fetching it here for
+  //     ~100-150 survivors instead of in the discovery mask (~572 requests) gives
+  //     ~4x cost reduction at scale. Merge the text back onto each place object.
+  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
+  const editorialMap = await enrichEditorialSummaries(clipped, apiKey);
+  const clippedWithEditorial = clipped.map((place) => ({
+    ...place,
+    editorialSummary: editorialMap.get(place.id)
+      ? { text: editorialMap.get(place.id) }
+      : undefined,
+  }));
+
   // 4. Upsert pending rows + purge excluded rows from the table.
   //    Excluded places are not written to raw_places — this keeps the table
   //    clean for Step 2 enrichment. Any stale excluded rows from prior runs
   //    for this area are deleted so they don't accumulate.
-  const keptRows = clipped.map((place) => placeToRow(place, areaKey, { status: 'pending' }));
+  const keptRows = clippedWithEditorial.map((place) => placeToRow(place, areaKey, { status: 'pending' }));
   const totalExcluded = excluded.length + outOfBounds.length;
 
   // Delete any previously-excluded rows for this area (cleanup from prior runs)

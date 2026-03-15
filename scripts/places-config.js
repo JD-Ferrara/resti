@@ -264,20 +264,18 @@ export const DESTINATION_QSR = new Set([
 
 // ── Google Places Field Mask ─────────────────────────────
 // Controls which fields are returned by Nearby Search + Text Search requests.
-// Requesting higher-tier fields on every search request is the main cost driver,
-// so this mask is kept to the minimum needed for:
-//   (a) local filtering: geofence, rating, review count, chain exclusion
-//   (b) Claude classification: name, address, types, price, editorial summary, rating
+// Requesting higher-tier fields on every search request is the main cost driver.
 //
-// All fields here are Basic or Advanced Data tier — no Preferred tier (no photos),
-// so there is no surcharge per request.
+// BILLING TIERS for Nearby Search (New) / Text Search (New):
+//   Basic:     id, displayName, formattedAddress, location, types, businessStatus
+//   Advanced:  rating, userRatingCount, priceLevel  (+$$ vs Basic)
+//   Preferred: editorialSummary, reviews, servesBeer, outdoorSeating, etc. (+$$$ vs Advanced)
 //
-// Note: raw_places has columns for atmosphere data (has_outdoor_seating, serves_beer,
-// serves_dinner, etc.) that are NOT currently populated. When the frontend adds
-// filters that depend on those fields (e.g. "outdoor seating", "serves dinner"),
-// add a Place Details enrichment step here targeting only the Claude-approved
-// filtered_places candidates. That step would use the Place Details (New) endpoint
-// with a separate field mask and would run after build-filtered-places.js.
+// A single Preferred field bills the ENTIRE request at the Preferred (Atmosphere) rate.
+// editorialSummary is Preferred — including it here would bill all 572+ discovery
+// requests at the highest tier. Instead it is fetched in a targeted Place Details
+// enrichment step (seed-raw-places.js) for quality-filtered candidates only,
+// reducing Preferred-tier calls from ~572 to ~100-150 per area.
 //
 // See: https://developers.google.com/maps/documentation/places/web-service/place-data-fields
 export const PLACES_DISCOVERY_FIELD_MASK = [
@@ -290,8 +288,15 @@ export const PLACES_DISCOVERY_FIELD_MASK = [
   'places.priceLevel',
   'places.types',
   'places.businessStatus',
-  'places.editorialSummary',
+  // editorialSummary intentionally excluded — it is Preferred tier and would
+  // bill all discovery requests at the Atmosphere rate. Fetched separately
+  // via Place Details (PLACES_DETAILS_EDITORIAL_FIELD_MASK) after filtering.
 ].join(',');
+
+// Field mask for the Place Details (New) editorial enrichment step.
+// editorialSummary is Preferred (Atmosphere) tier, so this is only called
+// for quality-filtered candidates — not every discovered place.
+export const PLACES_DETAILS_EDITORIAL_FIELD_MASK = 'editorialSummary';
 
 // ── NYC GeoJSON ──────────────────────────────────────────
 // NYC Open Data — Neighborhood Tabulation Areas (NTA) boundaries
