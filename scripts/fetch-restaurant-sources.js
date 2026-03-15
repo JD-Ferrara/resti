@@ -100,8 +100,8 @@ function urlToColumn(url) {
 // of the same name).
 function isRestaurantSpecificResult(result, restaurant) {
   const nTokens = nameTokens(restaurant.name);
-  const loc     = locationHint(restaurant.address);
-  const hasSpecificLocation = loc !== 'New York City';
+  const loc     = restaurant.area || restaurant.district || null;
+  const hasSpecificLocation = !!loc;
 
   const urlPath     = (() => { try { return new URL(result.url).pathname.toLowerCase(); } catch { return ''; } })();
   const titleLower  = (result.title   || '').toLowerCase();
@@ -121,6 +121,7 @@ function isRestaurantSpecificResult(result, restaurant) {
     const locInContent = locTokens.some(t => contentLower.includes(t));
     if (!locInTitle && !locInContent) return false;
   }
+
 
   return true;
 }
@@ -151,32 +152,15 @@ async function tavilySearch(query) {
 }
 
 // ── Build search query for a restaurant ───────────────────
-// Extracts a clean location hint from the address field.
-// "Level 4, 20 Hudson Yards" → "Hudson Yards"
-// "385 9th Ave, Manhattan West" → "Manhattan West"
-function locationHint(address) {
-  if (!address) return 'New York City';
-
-  // Common landmark areas
-  const landmarks = [
-    'Hudson Yards', 'Manhattan West', 'The Spiral',
-    'Chelsea', 'Meatpacking', 'West Village', 'Greenwich Village',
-    'SoHo', 'NoHo', 'Tribeca', 'Lower East Side',
-    'Union Square', 'Gramercy', 'Flatiron', 'NoMad', 'East Village',
-  ];
-  for (const lm of landmarks) {
-    if (address.includes(lm)) return lm;
-  }
-
-  return 'New York City';
-}
-
+// Uses the structured area column (most specific sub-area, e.g.
+// "Manhattan West") falling back to district ("Hudson Yards"),
+// then to the generic city. Both name and location are quoted so
+// Tavily requires both terms — anchoring results to this specific
+// location rather than other branches or events with the same name.
 function buildQuery(restaurant) {
-  const loc = locationHint(restaurant.address);
-  // Quote both the name and the specific location so Tavily requires both terms,
-  // keeping results anchored to this address rather than other locations/events.
-  // e.g. → "BondST" "Hudson Yards" restaurant New York review
-  if (loc !== 'New York City') {
+  const loc = restaurant.area || restaurant.district;
+  if (loc) {
+    // e.g. → "BondST" "Hudson Yards" restaurant New York review
     return `"${restaurant.name}" "${loc}" restaurant New York review`;
   }
   return `"${restaurant.name}" restaurant New York City review feature`;
@@ -213,7 +197,7 @@ async function main() {
   // ── Load restaurants ──────────────────────────────────
   let restaurantQuery = supabase
     .from('restaurants')
-    .select('id, name, cuisine, address')
+    .select('id, name, cuisine, address, area, district')
     .order('id');
 
   if (targetId) restaurantQuery = restaurantQuery.eq('id', targetId);
