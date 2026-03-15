@@ -24,9 +24,9 @@ on:
         required: false
         default: ''
 
-  # Refresh sources every Monday at 06:00 UTC
-  schedule:
-    - cron: '0 6 * * 1'
+  # Scheduled auto-run (disabled — uncomment to re-enable)
+  # schedule:
+  #   - cron: '0 6 * * 1'  # every Monday at 06:00 UTC
 
 jobs:
   fetch-sources:
