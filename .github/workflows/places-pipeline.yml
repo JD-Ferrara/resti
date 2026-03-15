@@ -1,4 +1,4 @@
-name: "Places Pipeline — Step 1: Discover + Filter"
+name: "Step 1: Places Pipeline — Discover + Filter"
 # Fetches minimal place data (id, name, location, rating, review count, types)
 # for the selected area(s), applies local filters (geofence, rating, chain
 # exclusion), and upserts only qualifying rows to raw_places with status=pending.
