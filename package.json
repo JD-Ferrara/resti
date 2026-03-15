@@ -12,7 +12,10 @@
     "places:compare:save": "node scripts/compare-hudson-yards.js --save",
     "places:fetch": "node scripts/fetch-places.js",
     "places:seed": "node scripts/seed-raw-places.js",
-    "places:filter": "node scripts/build-filtered-places.js"
+    "places:filter": "node scripts/build-filtered-places.js",
+    "sources:fetch": "node scripts/fetch-restaurant-sources.js",
+    "sources:fetch:dry": "node scripts/fetch-restaurant-sources.js --dry-run",
+    "sources:fetch:force": "node scripts/fetch-restaurant-sources.js --force"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
