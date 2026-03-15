@@ -1,4 +1,4 @@
-name: "Sources Pipeline — Step 3: Fetch Editorial Links"
+name: "Step 3: Fetch Editorial Links"
 # Searches Tavily for editorial coverage (reviews, features, guides)
 # for each curated restaurant and upserts discovered URLs into
 # restaurant_sources. Safe to re-run at any time.
