@@ -1,0 +1,74 @@
+name: "Sources Pipeline — Step 3: Fetch Editorial Links"
+# Searches Tavily for editorial coverage (reviews, features, guides)
+# for each curated restaurant and upserts discovered URLs into
+# restaurant_sources. Safe to re-run at any time.
+#
+# Modes:
+#   Default  — skips rows fetched in the last 7 days (incremental)
+#   Force    — replaces ALL existing URLs with fresh Tavily results
+#   Single   — targets one restaurant by its id
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run mode'
+        required: true
+        default: 'incremental'
+        type: choice
+        options:
+          - incremental
+          - force
+      restaurant_id:
+        description: 'Optional: single restaurant id (leave blank for all)'
+        required: false
+        default: ''
+
+  # Refresh sources every Monday at 06:00 UTC
+  schedule:
+    - cron: '0 6 * * 1'
+
+jobs:
+  fetch-sources:
+    name: "Step 3: Fetch editorial source links via Tavily"
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Write .env
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+        run: |
+          echo "VITE_SUPABASE_URL=$VITE_SUPABASE_URL" >> .env
+          echo "SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY" >> .env
+          echo "TAVILY_API_KEY=$TAVILY_API_KEY" >> .env
+
+      - name: Build script flags
+        id: flags
+        run: |
+          FLAGS=""
+          if [ "${{ github.event.inputs.mode }}" = "force" ]; then
+            FLAGS="$FLAGS --force"
+          fi
+          if [ -n "${{ github.event.inputs.restaurant_id }}" ]; then
+            FLAGS="$FLAGS --id=${{ github.event.inputs.restaurant_id }}"
+          fi
+          echo "flags=$FLAGS" >> $GITHUB_OUTPUT
+
+      - name: "Fetch editorial sources"
+        run: node scripts/fetch-restaurant-sources.js ${{ steps.flags.outputs.flags }}
