@@ -270,15 +270,25 @@ async function main() {
     }
 
     // ── Build upsert payload ─────────────────────────────
-    // When --force: overwrite all discovered columns.
-    // Otherwise: only fill NULL columns; preserve manually-entered URLs.
+    // --force: write every column — discovered URLs get their value,
+    //          columns Tavily didn't find are explicitly set to null
+    //          so stale/broken URLs are cleared rather than left behind.
+    // Default: only fill columns that are currently null; preserve
+    //          manually-entered URLs for columns Tavily didn't find.
     const upsertPayload = { restaurant_id: restaurant.id };
 
-    for (const [col, url] of Object.entries(discovered)) {
-      if (isForce || !existing[col]) {
-        upsertPayload[col] = url;
-      } else {
-        console.log(`        kept  (already set): [${col}]`);
+    if (isForce) {
+      // Null-out all columns first, then overwrite with anything found
+      for (const col of Object.keys(PUBLICATIONS)) {
+        upsertPayload[col] = discovered[col] || null;
+      }
+    } else {
+      for (const [col, url] of Object.entries(discovered)) {
+        if (!existing[col]) {
+          upsertPayload[col] = url;
+        } else {
+          console.log(`        kept  (already set): [${col}]`);
+        }
       }
     }
 
