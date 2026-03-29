@@ -288,6 +288,12 @@ export const PLACES_DISCOVERY_FIELD_MASK = [
   'places.priceLevel',
   'places.types',
   'places.businessStatus',
+  // websiteUri is an Advanced (Contact) tier field, but since rating/userRatingCount
+  // already bill the request at Advanced rate, adding websiteUri costs nothing extra.
+  // Storing it in raw_places.website now means the future pipeline
+  // (raw_places → filtered_places → restaurants) carries the correct website
+  // from Google's authoritative source, avoiding stale manual entries.
+  'places.websiteUri',
   // editorialSummary intentionally excluded — it is Preferred tier and would
   // bill all discovery requests at the Atmosphere rate. Fetched separately
   // via Place Details (PLACES_DETAILS_EDITORIAL_FIELD_MASK) after filtering.

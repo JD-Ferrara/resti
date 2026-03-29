@@ -224,19 +224,22 @@ async function findInstagramFromWebsite(websiteUrl, restaurant) {
 
 // ── API callers ───────────────────────────────────────────
 
-// Calls Tavily with a specific include_domains list.
-async function tavilySearch(query, includeDomains) {
+// Calls Tavily. Pass an empty includeDomains array (default) for a broad global search.
+async function tavilySearch(query, includeDomains = []) {
+  const body = {
+    api_key:        TAVILY_API_KEY,
+    query,
+    search_depth:   'basic',
+    max_results:    MAX_RESULTS,
+    include_answer: false,
+  };
+  // Only add include_domains when non-empty — omitting it searches everything
+  if (includeDomains.length > 0) body.include_domains = includeDomains;
+
   const res = await fetch('https://api.tavily.com/search', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      api_key:         TAVILY_API_KEY,
-      query,
-      search_depth:    'basic',
-      include_domains: includeDomains,
-      max_results:     MAX_RESULTS,
-      include_answer:  false,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!res.ok) {
@@ -280,6 +283,35 @@ async function googlePlacesTextSearch(name, address) {
   return place.websiteUri || null;
 }
 
+// Validates a Tavily reservation result using both URL structure AND result content.
+// Extends isValidReservation() to catch same-chain different-location results
+// (e.g. "P.J. Clarke's on the Hudson" when we want the Hudson Yards location).
+//
+// For multi-word location signals, ALL tokens must appear somewhere in
+// the combined URL path + result title + result content. This AND logic is the
+// key: "Hudson Yards" requires both "hudson" AND "yards", so "on the Hudson"
+// (which has "hudson" but not "yards") is correctly rejected.
+function isValidReservationResult(result, restaurant) {
+  if (!isValidReservation(result.url, restaurant)) return false;
+
+  // Derive location signal: prefer area (most specific), then district, then address
+  const locationSignal = restaurant.area || restaurant.district || restaurant.address || null;
+  if (!locationSignal) return true;  // no location data — URL check is enough
+
+  const locTokens = locationSignal.toLowerCase().split(/\s+/).filter(t => t.length > 3);
+  if (locTokens.length === 0) return true;
+
+  const urlPath  = (() => { try { return new URL(result.url).pathname.toLowerCase(); } catch { return ''; } })();
+  const combined = `${urlPath} ${(result.title || '').toLowerCase()} ${(result.content || '').toLowerCase()}`;
+
+  if (locTokens.length > 1) {
+    // AND logic: every token must appear — prevents partial location matches
+    return locTokens.every(t => combined.includes(t));
+  } else {
+    return locTokens.some(t => combined.includes(t));
+  }
+}
+
 // ── Query builders ────────────────────────────────────────
 
 function buildInstagramQuery(restaurant) {
@@ -294,6 +326,12 @@ function buildReservationQuery(restaurant) {
   const loc = restaurant.area || restaurant.district;
   if (loc) {
     return `"${restaurant.name}" "${loc}" New York reservation`;
+  }
+  // No area/district set (e.g. restaurants seeded before pipeline enrichment).
+  // Use the street address as the location signal to disambiguate multi-location
+  // chains (e.g. "P.J. Clarke's" at "4 Hudson Yards" vs "on the Hudson").
+  if (restaurant.address) {
+    return `"${restaurant.name}" "${restaurant.address}" New York reservation`;
   }
   return `"${restaurant.name}" New York City reservation`;
 }
@@ -477,17 +515,45 @@ async function main() {
           if (igUrl) console.log(`      instagram  : found (website scrape): ${igUrl}`);
         }
 
-        // Step 2: Fall back to Tavily if website scrape found nothing.
+        // Step 2: Broad Tavily search as fallback.
+        // Using no include_domains filter so Tavily searches everything — review
+        // sites, Google My Business snippets, and news articles frequently mention
+        // Instagram handles even when Instagram.com itself is not indexed. We scan
+        // both the result URLs and the content snippets for instagram.com links.
         if (!igUrl) {
           const query = buildInstagramQuery(restaurant);
           try {
-            const results = await tavilySearch(query, ['instagram.com']);
+            const results = await tavilySearch(query);  // no domain filter
             madeTavilyCall = true;
-            const match = results.find(r => isValidInstagram(r.url, restaurant));
-            if (match) {
-              igUrl = match.url;
-              console.log(`      instagram  : found (Tavily): ${igUrl}`);
+
+            // Check result URLs first (direct instagram.com hits)
+            for (const r of results) {
+              if (r.url.includes('instagram.com') && isValidInstagram(r.url, restaurant)) {
+                igUrl = r.url;
+                break;
+              }
             }
+
+            // Then scan content snippets for instagram.com mentions
+            if (!igUrl) {
+              const NON_PROFILE = new Set(['p', 'reel', 'reels', 'explore', 'stories', 'tv', 'accounts', 'directory']);
+              for (const r of results) {
+                const text = `${r.url} ${r.title || ''} ${r.content || ''}`;
+                const matches = [...text.matchAll(/instagram\.com\/([a-zA-Z0-9._]{3,60})\/?/g)];
+                for (const m of matches) {
+                  const slug = m[1].split('?')[0].replace(/\/$/, '');
+                  if (NON_PROFILE.has(slug)) continue;
+                  const profileUrl = `https://www.instagram.com/${slug}/`;
+                  if (isValidInstagram(profileUrl, restaurant)) {
+                    igUrl = profileUrl;
+                    break;
+                  }
+                }
+                if (igUrl) break;
+              }
+            }
+
+            if (igUrl) console.log(`      instagram  : found (Tavily): ${igUrl}`);
           } catch (err) {
             console.error(`      instagram  : Tavily ERROR: ${err.message}`);
           }
@@ -513,7 +579,7 @@ async function main() {
         try {
           const results = await tavilySearch(query, RESERVATION_DOMAINS);
           madeTavilyCall = true;
-          const match = results.find(r => isValidReservation(r.url, restaurant));
+          const match = results.find(r => isValidReservationResult(r, restaurant));
           if (match) {
             updates.reservation = match.url;
             console.log(`      reservation: found: ${match.url}`);
