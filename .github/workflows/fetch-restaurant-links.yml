@@ -1,4 +1,4 @@
-name: "Links Pipeline — Fetch Website / Instagram / Reservation"
+name: "Step 4: Fetch Page Links"
 # Populates website, instagram, and reservation columns on the
 # restaurants table using Google Places (website) and Tavily
 # (instagram, reservation platforms).
