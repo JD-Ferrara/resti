@@ -15,7 +15,10 @@
     "places:filter": "node scripts/build-filtered-places.js",
     "sources:fetch": "node scripts/fetch-restaurant-sources.js",
     "sources:fetch:dry": "node scripts/fetch-restaurant-sources.js --dry-run",
-    "sources:fetch:force": "node scripts/fetch-restaurant-sources.js --force"
+    "sources:fetch:force": "node scripts/fetch-restaurant-sources.js --force",
+    "links:fetch": "node scripts/fetch-restaurant-links.js",
+    "links:fetch:dry": "node scripts/fetch-restaurant-links.js --dry-run",
+    "links:fetch:force": "node scripts/fetch-restaurant-links.js --force"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
