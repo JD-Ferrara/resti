@@ -186,6 +186,42 @@ async function validateLink(url, restaurant, fieldType) {
   return { valid: true };
 }
 
+// Scrapes a restaurant's own website HTML for a self-linked Instagram profile.
+// This is the most reliable Instagram discovery method: restaurants link to their
+// own account, so no name-matching ambiguity, no Tavily crawler limitations.
+//
+// Falls back to Tavily only when no website is available or no link is found.
+async function findInstagramFromWebsite(websiteUrl, restaurant) {
+  let res;
+  try {
+    res = await fetch(websiteUrl, {
+      method: 'GET',
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; RestaurantBot/1.0)' },
+      signal: AbortSignal.timeout(VALIDATE_TIMEOUT_MS),
+      redirect: 'follow',
+    });
+  } catch { return null; }
+
+  if (!res.ok) return null;
+
+  const html = await res.text().catch(() => '');
+
+  // Extract all instagram.com hrefs from the page
+  const matches = [...html.matchAll(/https?:\/\/(?:www\.)?instagram\.com\/([a-zA-Z0-9._]{1,60})\/?/g)];
+  const NON_PROFILE = new Set(['p', 'reel', 'reels', 'explore', 'stories', 'tv', 'accounts', 'directory', 'shoppingcart']);
+
+  for (const match of matches) {
+    const slug = match[1].split('?')[0].replace(/\/$/, '');  // strip query params / trailing slash
+    if (slug.length < 3) continue;
+    if (NON_PROFILE.has(slug)) continue;
+    // Normalise to canonical profile URL
+    const profileUrl = `https://www.instagram.com/${slug}/`;
+    if (isValidInstagram(profileUrl, restaurant)) return profileUrl;
+  }
+
+  return null;
+}
+
 // ── API callers ───────────────────────────────────────────
 
 // Calls Tavily with a specific include_domains list.
@@ -377,27 +413,50 @@ async function main() {
     if (doWebsite) {
       const status = await fieldStatus('website', restaurant.website);
       if (status === 'discover') {
-        // Step 1: raw_places cache
+        let found = false;
+
+        // Step 1: raw_places cache — validate before trusting.
+        // The cache may be stale if the restaurant was renamed (e.g. Nizuc → Talavera):
+        // the old website would pass the restaurant_id lookup but fail the name check.
         const cached = rawWebsiteMap[restaurant.id];
         if (cached) {
-          updates.website = cached;
-          console.log(`      website    : found (raw_places cache): ${cached}`);
-        } else {
-          // Step 2: Google Places API
+          if (skipValidate) {
+            updates.website = cached;
+            console.log(`      website    : found (raw_places cache): ${cached}`);
+            found = true;
+          } else {
+            const cacheCheck = await validateLink(cached, restaurant, 'website');
+            if (cacheCheck.valid) {
+              updates.website = cached;
+              console.log(`      website    : found (raw_places cache, validated): ${cached}`);
+              found = true;
+            } else {
+              console.log(`      website    : raw_places cache stale (${cacheCheck.reason}) — trying Google Places`);
+            }
+          }
+        }
+
+        // Step 2: Google Places API
+        if (!found) {
           try {
             const url = await googlePlacesTextSearch(restaurant.name, restaurant.address || '');
             madeGoogleCall = true;
             if (url) {
               updates.website = url;
               console.log(`      website    : found (Google Places): ${url}`);
-            } else if (isForce && restaurant.website) {
-              console.log(`      website    : force-kept (not found): ${restaurant.website}`);
-            } else {
-              updates.website = null;  // known-bad, nothing found → clear it
-              console.log('      website    : not found — clearing stale value');
+              found = true;
             }
           } catch (err) {
             console.error(`      website    : ERROR: ${err.message}`);
+          }
+        }
+
+        if (!found) {
+          if (isForce && restaurant.website) {
+            console.log(`      website    : force-kept (not found): ${restaurant.website}`);
+          } else {
+            updates.website = null;
+            console.log('      website    : not found — clearing stale value');
           }
         }
       }
@@ -407,24 +466,42 @@ async function main() {
     if (doInstagram) {
       const status = await fieldStatus('instagram', restaurant.instagram);
       if (status === 'discover') {
-        const query = buildInstagramQuery(restaurant);
-        try {
-          const results = await tavilySearch(query, ['instagram.com']);
-          madeTavilyCall = true;
-          const match = results.find(r => isValidInstagram(r.url, restaurant));
-          if (match) {
-            updates.instagram = match.url;
-            console.log(`      instagram  : found: ${match.url}`);
-          } else if (isForce && restaurant.instagram) {
-            console.log(`      instagram  : force-kept (not found): ${restaurant.instagram}`);
-          } else {
-            updates.instagram = null;  // known-bad, nothing found → clear it
-            console.log('      instagram  : not found — clearing stale value');
-          }
-        } catch (err) {
-          console.error(`      instagram  : ERROR: ${err.message}`);
+        let igUrl = null;
+
+        // Step 1: Scrape the restaurant's own website for an Instagram link.
+        // This is more reliable than Tavily — Instagram blocks crawlers, but
+        // restaurants link to their own account from their website footer/nav.
+        const knownWebsite = updates.website || restaurant.website;
+        if (knownWebsite) {
+          igUrl = await findInstagramFromWebsite(knownWebsite, restaurant);
+          if (igUrl) console.log(`      instagram  : found (website scrape): ${igUrl}`);
         }
-        await sleep(TAVILY_DELAY_MS);
+
+        // Step 2: Fall back to Tavily if website scrape found nothing.
+        if (!igUrl) {
+          const query = buildInstagramQuery(restaurant);
+          try {
+            const results = await tavilySearch(query, ['instagram.com']);
+            madeTavilyCall = true;
+            const match = results.find(r => isValidInstagram(r.url, restaurant));
+            if (match) {
+              igUrl = match.url;
+              console.log(`      instagram  : found (Tavily): ${igUrl}`);
+            }
+          } catch (err) {
+            console.error(`      instagram  : Tavily ERROR: ${err.message}`);
+          }
+          await sleep(TAVILY_DELAY_MS);
+        }
+
+        if (igUrl) {
+          updates.instagram = igUrl;
+        } else if (isForce && restaurant.instagram) {
+          console.log(`      instagram  : force-kept (not found): ${restaurant.instagram}`);
+        } else {
+          updates.instagram = null;
+          console.log('      instagram  : not found — clearing stale value');
+        }
       }
     }
 
