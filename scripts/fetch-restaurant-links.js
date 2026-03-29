@@ -1,19 +1,33 @@
 // ============================================================
 // fetch-restaurant-links.js — website / instagram / reservation
 // ============================================================
-// Populates the website, instagram, and reservation columns on
-// the restaurants table using the most reliable source for each:
+// Populates and validates the website, instagram, and reservation
+// columns on the restaurants table.
 //
 //   website     — Google Places API (websiteUri from Business profile)
 //   instagram   — Tavily (instagram.com, profile page validation)
 //   reservation — Tavily (resy.com / opentable.com / tock.com / sevenrooms.com)
 //
+// Validation (runs before skipping any already-set field):
+//   instagram   — URL slug must contain current restaurant name tokens
+//   reservation — URL path must contain current restaurant name tokens
+//   website     — HTTP GET; current restaurant name must appear in <title>/og:title
+//
+// This catches two classes of stale data:
+//   1. Dead links   — URL 404s or times out
+//   2. Wrong restaurant — link points to old/renamed restaurant (e.g. Nizuc → Talavera)
+//
+// When validation fails and re-discovery also finds nothing, the field
+// is set to null (known-bad link is cleared). Use --skip-validate to
+// restore the old fast-skip behaviour and trust all existing values.
+//
 // Usage:
-//   node scripts/fetch-restaurant-links.js               # all restaurants, skip populated
+//   node scripts/fetch-restaurant-links.js               # all restaurants, validate + fill gaps
 //   node scripts/fetch-restaurant-links.js --id=24       # single restaurant by id
-//   node scripts/fetch-restaurant-links.js --force       # re-fetch all, overwrite existing
+//   node scripts/fetch-restaurant-links.js --force       # re-discover all, preserve if not found
 //   node scripts/fetch-restaurant-links.js --dry-run     # preview only, no DB writes
 //   node scripts/fetch-restaurant-links.js --field=instagram  # one field only
+//   node scripts/fetch-restaurant-links.js --skip-validate    # trust existing values, only fill nulls
 //
 // Prerequisites:
 //   TAVILY_API_KEY            — Tavily dashboard → API Keys
@@ -25,11 +39,9 @@
 //   Tavily Starter: 1,000 searches/month. Full run uses up to ~52 calls (2 per restaurant).
 //   Google Places: website lookups use raw_places cache first (free), only API if miss.
 //
-// --force behaviour (intentionally differs from fetch-restaurant-sources.js):
+// --force behaviour:
 //   Found    → write new value
-//   Not found → PRESERVE existing value (search failure ≠ stale/dead link)
-//   Rationale: restaurant websites and Instagram handles are stable; a Tavily miss
-//   is more likely a query quality issue than a dead URL.
+//   Not found → PRESERVE existing value (force = best-effort update, not a sweep)
 
 import 'dotenv/config';
 import { createClient } from '@supabase/supabase-js';
@@ -47,7 +59,8 @@ const MAX_RESULTS      = 10;
 const RESERVATION_DOMAINS = ['resy.com', 'opentable.com', 'tock.com', 'sevenrooms.com'];
 const TEXT_SEARCH_URL     = 'https://places.googleapis.com/v1/places:searchText';
 
-const VALID_FIELDS = ['website', 'instagram', 'reservation'];
+const VALID_FIELDS    = ['website', 'instagram', 'reservation'];
+const VALIDATE_TIMEOUT_MS = 5000;  // per-URL HTTP check timeout
 
 // ── Helpers ───────────────────────────────────────────────
 
@@ -109,6 +122,68 @@ function isValidReservation(url, restaurant) {
   // Name tokens must appear in the URL path (venue slug)
   const tokens = nameTokens(restaurant.name);
   return tokens.some(t => urlPath.includes(t));
+}
+
+// Validates an already-stored link for correctness and liveness.
+//
+// Strategy per field type:
+//   instagram   — structural: slug must still match current name tokens
+//                 (catches renames without an HTTP call); then GET for liveness
+//   reservation — structural: path must still match current name tokens;
+//                 then GET for liveness
+//   website     — GET + current restaurant name must appear in <title>/og:title
+//                 (structural check insufficient — website URLs don't embed names)
+//
+// Returns { valid: true } or { valid: false, reason: string }
+async function validateLink(url, restaurant, fieldType) {
+  // ── Structural check (instagram + reservation) ─────────
+  // Re-running these catches renamed restaurants without hitting the network.
+  // e.g. old URL contains "nizuc" but current name is "Talavera" → fail immediately.
+  if (fieldType === 'instagram' && !isValidInstagram(url, restaurant)) {
+    return { valid: false, reason: 'URL slug does not match current restaurant name' };
+  }
+  if (fieldType === 'reservation' && !isValidReservation(url, restaurant)) {
+    return { valid: false, reason: 'URL path does not match current restaurant name' };
+  }
+
+  // ── HTTP liveness + content check ─────────────────────
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'GET',
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; RestaurantBot/1.0)' },
+      signal: AbortSignal.timeout(VALIDATE_TIMEOUT_MS),
+      redirect: 'follow',
+    });
+  } catch (err) {
+    return { valid: false, reason: err.name === 'TimeoutError' ? 'timeout' : 'connection failed' };
+  }
+
+  if (!res.ok) {
+    return { valid: false, reason: `HTTP ${res.status}` };
+  }
+
+  // For website: check that the current restaurant name appears in the page title.
+  // Instagram og:title is unreliable (login walls), and reservation URL slugs are
+  // already verified structurally above.
+  if (fieldType === 'website') {
+    const html = (await res.text().catch(() => '')).slice(0, 10000).toLowerCase();
+    const titleMatch = html.match(/<title[^>]*>([^<]{1,200})<\/title>/);
+    const title      = titleMatch ? titleMatch[1] : '';
+    const ogMatch    = html.match(/property="og:title"[^>]*content="([^"]{1,200})"/)
+                    || html.match(/content="([^"]{1,200})"[^>]*property="og:title"/);
+    const ogTitle    = ogMatch ? ogMatch[1] : '';
+    const combined   = `${title} ${ogTitle}`;
+    const tokens     = nameTokens(restaurant.name);
+    if (!tokens.some(t => combined.includes(t))) {
+      return { valid: false, reason: 'restaurant name not found in page title' };
+    }
+  } else {
+    // Drain the body to avoid socket leaks (instagram/reservation GET)
+    await res.body?.cancel?.();
+  }
+
+  return { valid: true };
 }
 
 // ── API callers ───────────────────────────────────────────
@@ -191,13 +266,14 @@ function buildReservationQuery(restaurant) {
 
 async function main() {
   // ── CLI flags ─────────────────────────────────────────
-  const args        = process.argv.slice(2);
-  const isDryRun    = args.includes('--dry-run');
-  const isForce     = args.includes('--force');
-  const idArg       = args.find(a => a.startsWith('--id='));
-  const targetId    = idArg ? parseInt(idArg.split('=')[1], 10) : null;
-  const fieldArg    = args.find(a => a.startsWith('--field='));
-  const targetField = fieldArg ? fieldArg.split('=')[1] : null;
+  const args         = process.argv.slice(2);
+  const isDryRun     = args.includes('--dry-run');
+  const isForce      = args.includes('--force');
+  const skipValidate = args.includes('--skip-validate');
+  const idArg        = args.find(a => a.startsWith('--id='));
+  const targetId     = idArg ? parseInt(idArg.split('=')[1], 10) : null;
+  const fieldArg     = args.find(a => a.startsWith('--field='));
+  const targetField  = fieldArg ? fieldArg.split('=')[1] : null;
 
   if (targetField && !VALID_FIELDS.includes(targetField)) {
     console.error(`Invalid --field value. Must be one of: ${VALID_FIELDS.join(', ')}`);
@@ -233,10 +309,11 @@ async function main() {
   ].filter(Boolean);
 
   console.log('fetch-restaurant-links');
-  console.log('  mode    :', isDryRun ? 'dry-run (no writes)' : 'live');
-  console.log('  force   :', isForce ? 'yes (re-fetch; preserve if not found)' : 'no (skip already-set)');
-  console.log('  fields  :', activeFields.join(', '));
-  if (targetId) console.log('  target  : restaurant id', targetId);
+  console.log('  mode     :', isDryRun ? 'dry-run (no writes)' : 'live');
+  console.log('  force    :', isForce ? 'yes (re-discover all; preserve if not found)' : 'no');
+  console.log('  validate :', isForce ? 'skipped (--force)' : skipValidate ? 'skipped (--skip-validate)' : 'yes (check existing links before skipping)');
+  console.log('  fields   :', activeFields.join(', '));
+  if (targetId) console.log('  target   : restaurant id', targetId);
   console.log();
 
   // ── Load restaurants ──────────────────────────────────
@@ -268,42 +345,43 @@ async function main() {
   let totalSkipped = 0;
 
   for (const restaurant of restaurants) {
-    // Skip recently fetched restaurants (unless --force)
-    if (!isForce && restaurant.links_fetched_at) {
-      const daysSince = (Date.now() - new Date(restaurant.links_fetched_at).getTime()) / 86400000;
-      if (daysSince < 30) {
-        console.log(`[${restaurant.id}] ${restaurant.name} — skipped (fetched ${Math.round(daysSince)}d ago)`);
-        totalSkipped++;
-        continue;
-      }
-    }
-
-    // Skip if all target fields are already set (and not --force)
-    if (!isForce) {
-      const allSet = activeFields.every(f => restaurant[f]);
-      if (allSet) {
-        console.log(`[${restaurant.id}] ${restaurant.name} — skipped (all fields set)`);
-        totalSkipped++;
-        continue;
-      }
-    }
-
     console.log(`[${restaurant.id}] ${restaurant.name}`);
 
     const updates = {};
     let madeGoogleCall = false;
     let madeTavilyCall = false;
 
+    // ── Per-field helper ──────────────────────────────
+    // Determines whether a field needs (re)discovery.
+    // Returns: 'discover' | 'keep' | 'keep-validated'
+    // Also logs the decision and queues a null update if validation fails
+    // and we know the stored value is bad.
+    async function fieldStatus(fieldName, existing) {
+      if (!existing) return 'discover';         // null/empty → always discover
+      if (isForce)   return 'discover';         // --force → always re-discover
+      if (skipValidate) {
+        console.log(`      ${fieldName.padEnd(11)}: skip (already set): ${existing}`);
+        return 'keep';
+      }
+      // Validate the stored link
+      const check = await validateLink(existing, restaurant, fieldName);
+      if (check.valid) {
+        console.log(`      ${fieldName.padEnd(11)}: ok (validated): ${existing}`);
+        return 'keep-validated';
+      }
+      console.log(`      ${fieldName.padEnd(11)}: stale (${check.reason}) — re-discovering`);
+      return 'discover';
+    }
+
     // ── website ──────────────────────────────────────
     if (doWebsite) {
-      if (!isForce && restaurant.website) {
-        console.log(`      website  : skip (already set): ${restaurant.website}`);
-      } else {
+      const status = await fieldStatus('website', restaurant.website);
+      if (status === 'discover') {
         // Step 1: raw_places cache
         const cached = rawWebsiteMap[restaurant.id];
         if (cached) {
           updates.website = cached;
-          console.log(`      website  : found (raw_places cache): ${cached}`);
+          console.log(`      website    : found (raw_places cache): ${cached}`);
         } else {
           // Step 2: Google Places API
           try {
@@ -311,14 +389,15 @@ async function main() {
             madeGoogleCall = true;
             if (url) {
               updates.website = url;
-              console.log(`      website  : found (Google Places): ${url}`);
+              console.log(`      website    : found (Google Places): ${url}`);
             } else if (isForce && restaurant.website) {
-              console.log(`      website  : force-kept (not found): ${restaurant.website}`);
+              console.log(`      website    : force-kept (not found): ${restaurant.website}`);
             } else {
-              console.log('      website  : not found');
+              updates.website = null;  // known-bad, nothing found → clear it
+              console.log('      website    : not found — clearing stale value');
             }
           } catch (err) {
-            console.error(`      website  : ERROR: ${err.message}`);
+            console.error(`      website    : ERROR: ${err.message}`);
           }
         }
       }
@@ -326,9 +405,8 @@ async function main() {
 
     // ── instagram ────────────────────────────────────
     if (doInstagram) {
-      if (!isForce && restaurant.instagram) {
-        console.log(`      instagram: skip (already set): ${restaurant.instagram}`);
-      } else {
+      const status = await fieldStatus('instagram', restaurant.instagram);
+      if (status === 'discover') {
         const query = buildInstagramQuery(restaurant);
         try {
           const results = await tavilySearch(query, ['instagram.com']);
@@ -336,14 +414,15 @@ async function main() {
           const match = results.find(r => isValidInstagram(r.url, restaurant));
           if (match) {
             updates.instagram = match.url;
-            console.log(`      instagram: found: ${match.url}`);
+            console.log(`      instagram  : found: ${match.url}`);
           } else if (isForce && restaurant.instagram) {
-            console.log(`      instagram: force-kept (not found): ${restaurant.instagram}`);
+            console.log(`      instagram  : force-kept (not found): ${restaurant.instagram}`);
           } else {
-            console.log('      instagram: not found');
+            updates.instagram = null;  // known-bad, nothing found → clear it
+            console.log('      instagram  : not found — clearing stale value');
           }
         } catch (err) {
-          console.error(`      instagram: ERROR: ${err.message}`);
+          console.error(`      instagram  : ERROR: ${err.message}`);
         }
         await sleep(TAVILY_DELAY_MS);
       }
@@ -351,9 +430,8 @@ async function main() {
 
     // ── reservation ───────────────────────────────────
     if (doReservation) {
-      if (!isForce && restaurant.reservation) {
-        console.log(`      reservation: skip (already set): ${restaurant.reservation}`);
-      } else {
+      const status = await fieldStatus('reservation', restaurant.reservation);
+      if (status === 'discover') {
         const query = buildReservationQuery(restaurant);
         try {
           const results = await tavilySearch(query, RESERVATION_DOMAINS);
@@ -365,7 +443,8 @@ async function main() {
           } else if (isForce && restaurant.reservation) {
             console.log(`      reservation: force-kept (not found): ${restaurant.reservation}`);
           } else {
-            console.log('      reservation: not found');
+            updates.reservation = null;  // known-bad, nothing found → clear it
+            console.log('      reservation: not found — clearing stale value');
           }
         } catch (err) {
           console.error(`      reservation: ERROR: ${err.message}`);
@@ -375,30 +454,28 @@ async function main() {
     }
 
     // ── Write to DB ───────────────────────────────────
-    const hasUpdates = Object.keys(updates).length > 0;
+    // Always write links_fetched_at to record that this restaurant was checked,
+    // even if all existing links validated fine and nothing changed.
+    updates.links_fetched_at = new Date().toISOString();
 
-    if (hasUpdates || madeTavilyCall || madeGoogleCall) {
-      updates.links_fetched_at = new Date().toISOString();
+    if (!isDryRun) {
+      const { error: uErr } = await supabase
+        .from('restaurants')
+        .update(updates)
+        .eq('id', restaurant.id);
 
-      if (!isDryRun) {
-        const { error: uErr } = await supabase
-          .from('restaurants')
-          .update(updates)
-          .eq('id', restaurant.id);
-
-        if (uErr) {
-          console.error(`      DB error: ${uErr.message}`);
-        } else {
-          totalUpdated++;
-        }
+      if (uErr) {
+        console.error(`      DB error: ${uErr.message}`);
+        totalSkipped++;
       } else {
-        if (hasUpdates) {
-          console.log('      [dry-run] would update:', JSON.stringify(updates, null, 6));
-        }
         totalUpdated++;
       }
     } else {
-      totalSkipped++;
+      const fieldUpdates = Object.entries(updates).filter(([k]) => k !== 'links_fetched_at');
+      if (fieldUpdates.length > 0) {
+        console.log('      [dry-run] would update:', JSON.stringify(Object.fromEntries(fieldUpdates), null, 6));
+      }
+      totalUpdated++;
     }
 
     console.log();
