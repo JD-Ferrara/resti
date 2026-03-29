@@ -22,6 +22,7 @@ on:
         options:
           - incremental
           - force
+          - skip-validate
       field:
         description: 'Optional: single field to update (leave blank for all)'
         required: false
@@ -75,6 +76,9 @@ jobs:
           FLAGS=""
           if [ "${{ github.event.inputs.mode }}" = "force" ]; then
             FLAGS="$FLAGS --force"
+          fi
+          if [ "${{ github.event.inputs.mode }}" = "skip-validate" ]; then
+            FLAGS="$FLAGS --skip-validate"
           fi
           if [ -n "${{ github.event.inputs.field }}" ]; then
             FLAGS="$FLAGS --field=${{ github.event.inputs.field }}"
