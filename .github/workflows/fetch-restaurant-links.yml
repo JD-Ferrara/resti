@@ -1,0 +1,88 @@
+name: "Links Pipeline — Fetch Website / Instagram / Reservation"
+# Populates website, instagram, and reservation columns on the
+# restaurants table using Google Places (website) and Tavily
+# (instagram, reservation platforms).
+#
+# Modes:
+#   Default  — skips fields already set and restaurants fetched in last 30 days
+#   Force    — re-fetches all; preserves existing values where nothing new is found
+#   Single   — targets one restaurant by its id
+#
+# Note: will be merged into the Filtered Places → Restaurants import
+# pipeline once that workflow is built.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run mode'
+        required: true
+        default: 'incremental'
+        type: choice
+        options:
+          - incremental
+          - force
+      field:
+        description: 'Optional: single field to update (leave blank for all)'
+        required: false
+        default: ''
+        type: choice
+        options:
+          - ''
+          - website
+          - instagram
+          - reservation
+      restaurant_id:
+        description: 'Optional: single restaurant id (leave blank for all)'
+        required: false
+        default: ''
+
+jobs:
+  fetch-links:
+    name: "Fetch restaurant website / instagram / reservation links"
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Write .env
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          GOOGLE_PLACES_API_KEY: ${{ secrets.GOOGLE_PLACES_API_KEY }}
+        run: |
+          echo "VITE_SUPABASE_URL=$VITE_SUPABASE_URL" >> .env
+          echo "SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY" >> .env
+          echo "TAVILY_API_KEY=$TAVILY_API_KEY" >> .env
+          echo "GOOGLE_PLACES_API_KEY=$GOOGLE_PLACES_API_KEY" >> .env
+
+      - name: Build script flags
+        id: flags
+        run: |
+          FLAGS=""
+          if [ "${{ github.event.inputs.mode }}" = "force" ]; then
+            FLAGS="$FLAGS --force"
+          fi
+          if [ -n "${{ github.event.inputs.field }}" ]; then
+            FLAGS="$FLAGS --field=${{ github.event.inputs.field }}"
+          fi
+          if [ -n "${{ github.event.inputs.restaurant_id }}" ]; then
+            FLAGS="$FLAGS --id=${{ github.event.inputs.restaurant_id }}"
+          fi
+          echo "flags=$FLAGS" >> $GITHUB_OUTPUT
+
+      - name: "Fetch restaurant links"
+        run: node scripts/fetch-restaurant-links.js ${{ steps.flags.outputs.flags }}
