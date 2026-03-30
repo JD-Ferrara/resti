@@ -248,48 +248,79 @@ async function findInstagramFromWebsite(websiteUrl, restaurant) {
 }
 
 // Scrapes a restaurant's own website HTML for a self-linked reservation platform URL.
-// This is the most reliable reservation discovery method: restaurants link their own
-// booking widget, so no name-matching needed — trust the source.
 //
 // Recognises: resy.com, opentable.com, exploretock.com / tock.com, sevenrooms.com
-// Platform-specific venue-page checks prevent returning homepage/search-page URLs.
-async function findReservationFromWebsite(websiteUrl) {
-  let res;
-  try {
-    res = await fetch(websiteUrl, {
-      method: 'GET',
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; RestaurantBot/1.0)' },
-      signal: AbortSignal.timeout(VALIDATE_TIMEOUT_MS),
-      redirect: 'follow',
-    });
-  } catch { return null; }
-
-  if (!res.ok) return null;
-
-  const html = await res.text().catch(() => '');
-
+//
+// Each candidate URL is passed through validateLink before being accepted.
+// This is essential for multi-location chains (e.g. PJ Clarke's, Jajaja) whose
+// websites link to all their locations — validateLink's location check ensures we
+// only accept the URL that corresponds to THIS specific location.
+// It also rejects stale event links (Resy event pages that 404 or have wrong names).
+//
+// Fallback: if the homepage yields nothing, tries /reservations, /reserve, /book —
+// catches JS-heavy sites where the booking button isn't in the initial HTML.
+async function findReservationFromWebsite(websiteUrl, restaurant) {
   const PLATFORM_RE = /https?:\/\/(?:www\.)?(?:resy\.com|opentable\.com|exploretock\.com|tock\.com|sevenrooms\.com)\/[^\s"'<>]+/gi;
-  const matches = [...html.matchAll(PLATFORM_RE)];
 
-  for (const match of matches) {
-    // Strip anything after a quote/angle-bracket/whitespace (HTML attribute boundary)
-    const raw = match[0].replace(/["'<>\s].*$/, '');
-    let parsed;
-    try { parsed = new URL(raw); } catch { continue; }
+  const tryFetch = async (url) => {
+    try {
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; RestaurantBot/1.0)' },
+        signal: AbortSignal.timeout(VALIDATE_TIMEOUT_MS),
+        redirect: 'follow',
+      });
+      if (!res.ok) return '';
+      return await res.text().catch(() => '');
+    } catch { return ''; }
+  };
 
-    const hostname = parsed.hostname.replace(/^www\./, '');
-    const segments = parsed.pathname.split('/').filter(Boolean);
-    if (segments.length < 1) continue;
+  const scanHtml = async (html) => {
+    const matches = [...html.matchAll(PLATFORM_RE)];
+    for (const match of matches) {
+      // Strip anything after a quote/angle-bracket/whitespace (HTML attribute boundary)
+      const raw = match[0].replace(/["'<>\s].*$/, '');
+      let parsed;
+      try { parsed = new URL(raw); } catch { continue; }
 
-    // Platform-specific venue-page guards
-    if (hostname === 'resy.com' && !parsed.pathname.includes('/venues/')) continue;
-    if (hostname === 'opentable.com' && !parsed.pathname.match(/^\/r\//)) continue;
-    // exploretock.com / tock.com: one path segment = venue slug — allow it
-    // sevenrooms.com: /reservations/{slug}/web — segments.length >= 2
+      const hostname = parsed.hostname.replace(/^www\./, '');
+      const segments = parsed.pathname.split('/').filter(Boolean);
+      if (segments.length < 1) continue;
 
-    // Return canonical URL without tracking query params
-    return `${parsed.protocol}//${parsed.hostname}${parsed.pathname}`;
-  }
+      // Platform-specific venue-page guards
+      if (hostname === 'resy.com' && !parsed.pathname.includes('/venues/')) continue;
+      if (hostname === 'opentable.com' && !parsed.pathname.match(/^\/r\//)) continue;
+      // exploretock.com / tock.com: one path segment = venue slug — allow it
+      // sevenrooms.com: /reservations/{slug}/web — segments.length >= 2
+
+      const candidateUrl = `${parsed.protocol}//${parsed.hostname}${parsed.pathname}`;
+
+      // Validate: liveness + location match before trusting the self-link.
+      // Rejects: wrong location (multi-location chains), stale/event links.
+      const { valid, reason } = await validateLink(candidateUrl, restaurant, 'reservation');
+      if (valid) return candidateUrl;
+      // If invalid, log at debug level and continue to next match in the page
+      console.log(`      reservation: website candidate rejected (${reason}): ${candidateUrl}`);
+    }
+    return null;
+  };
+
+  // Scan homepage first
+  const homepageHtml = await tryFetch(websiteUrl);
+  const fromHomepage = await scanHtml(homepageHtml);
+  if (fromHomepage) return fromHomepage;
+
+  // Subpage fallback: many JS-heavy restaurant sites render their booking button
+  // client-side, but have a dedicated /reservations page with a real anchor tag.
+  try {
+    const base = new URL(websiteUrl).origin;
+    for (const subpath of ['/reservations', '/reserve', '/book']) {
+      const html = await tryFetch(`${base}${subpath}`);
+      if (!html) continue;
+      const result = await scanHtml(html);
+      if (result) return result;
+    }
+  } catch { /* malformed websiteUrl — skip subpage scan */ }
 
   return null;
 }
@@ -693,7 +724,7 @@ async function main() {
         // If the website was just discovered this run, use that; else use DB value.
         const knownWebsite = updates.website || restaurant.website;
         if (knownWebsite) {
-          resUrl = await findReservationFromWebsite(knownWebsite);
+          resUrl = await findReservationFromWebsite(knownWebsite, restaurant);
           if (resUrl) console.log(`      reservation: found (website scrape): ${resUrl}`);
         }
 
