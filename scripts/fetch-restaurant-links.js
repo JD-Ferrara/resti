@@ -318,6 +318,35 @@ async function validateLink(url, restaurant, fieldType) {
   return { valid: true };
 }
 
+// Fetches a reservation platform URL and checks if the restaurant's street number
+// appears anywhere in the page HTML. The street number (e.g. "501" from "501 W 34th St")
+// is a precise, platform-neutral location signal that sidesteps district naming mismatches
+// (e.g. Google/Resy calling Hudson Yards "Manhattan West").
+//
+// Returns:
+//   'confirmed'   — street number found → high-confidence address match
+//   'bot_blocked' — 403/429 → URL is live but content unreadable; trust the slug
+//   'not_found'   — 200 but street number absent → probably wrong venue
+//   null          — no address on record, connection error, or other HTTP failure
+async function verifyWithAddress(url, restaurant) {
+  if (!restaurant.address) return null;
+  const streetNum = (restaurant.address.match(/^\d+/) || [])[0];
+  if (!streetNum) return null;
+  let res;
+  try {
+    res = await fetch(url, {
+      method:  'GET',
+      headers: { 'User-Agent': BROWSER_UA },
+      signal:  AbortSignal.timeout(VALIDATE_TIMEOUT_MS),
+      redirect: 'follow',
+    });
+  } catch { return null; }
+  if (res.status === 403 || res.status === 429) return 'bot_blocked';
+  if (!res.ok) return null;
+  const html = (await res.text().catch(() => '')).slice(0, 50000);
+  return html.includes(streetNum) ? 'confirmed' : 'not_found';
+}
+
 // Scrapes a restaurant's own website HTML for a self-linked Instagram profile.
 // This is the most reliable Instagram discovery method: restaurants link to their
 // own account, so no name-matching ambiguity, no Tavily crawler limitations.
@@ -753,8 +782,15 @@ function isValidReservationResult(result, restaurant) {
   const combined = `${urlPath} ${(result.title || '').toLowerCase()} ${(result.content || '').toLowerCase()}`;
 
   if (locTokens.length > 1) {
-    // AND logic: every token must appear — prevents partial location matches
-    return locTokens.every(t => combined.includes(t));
+    // AND logic: every token must appear — prevents partial location matches.
+    if (locTokens.every(t => combined.includes(t))) return true;
+    // Location token AND check failed — this can happen when the reservation
+    // platform uses a different neighbourhood name than our DB (e.g. Resy calls
+    // Hudson Yards "Manhattan West"). Fall back to street number matching:
+    // if the DB address starts with a number (e.g. "501 W 34th St"), check
+    // whether that number appears in the Tavily content snippet.
+    const streetNum = (restaurant.address || '').match(/^\d+/)?.[0];
+    return !!(streetNum && combined.includes(streetNum));
   } else {
     return locTokens.some(t => combined.includes(t));
   }
@@ -1062,10 +1098,11 @@ async function main() {
     // ── reservation ───────────────────────────────────
     //
     // Confidence scoring (only links with score ≥ 0.75 are persisted):
-    //   0.90 — static website scrape, liveness confirmed (HTTP 200)
-    //   0.85 — static website scrape, bot-blocked (403/429) — trusted self-link
+    //   0.90 — static website scrape (HTTP 200) or direct slug + address verified
     //   0.88 — Playwright scrape, slug validated
-    //   0.75 — Tavily + location confirmed in result content
+    //   0.85 — static website scrape, bot-blocked (403/429) — trusted self-link
+    //   0.78 — direct slug, bot-blocked — URL exists but address unverifiable
+    //   0.75 — Tavily + location confirmed in result content or street number
     //   0.60 — Tavily + no location signal → rejected, not saved
     if (doReservation) {
       const status = await fieldStatus('reservation', restaurant.reservation);
@@ -1105,7 +1142,54 @@ async function main() {
           }
         }
 
-        // Step 3: Tavily domain-filtered search — fallback when no website or
+        // Step 3a: Direct Resy slug attempt with address verification.
+        //
+        // Catches restaurants where:
+        //   (a) the website's Resy widget doesn't expose a resy.com link in static or
+        //       rendered HTML (e.g. Papa San's widget.resy.com embed), AND
+        //   (b) the Resy page uses a different neighbourhood label than our DB district
+        //       (e.g. Resy says "Manhattan West", our DB says "Hudson Yards"), causing
+        //       the Tavily AND-logic location check to reject a perfectly valid result.
+        //
+        // Strategy: derive a slug from the restaurant name, construct both the new
+        // (cities/new-york-ny/venues/{slug}) and old (cities/ny/{slug}) Resy URL
+        // formats, then verify using the street number from the DB address.  The
+        // street number is a platform-neutral, precise location identifier that
+        // sidesteps district naming discrepancies entirely.
+        //
+        // Confidence:
+        //   0.90 — street number confirmed on the page
+        //   0.78 — bot-blocked (403/429), URL exists but content unreadable
+        if (!resUrl && restaurant.address) {
+          const nameSlug   = nameTokens(restaurant.name).join('-');
+          const candidates = [
+            `https://resy.com/cities/new-york-ny/venues/${nameSlug}`,
+            `https://resy.com/cities/ny/${nameSlug}`,
+          ];
+          let botBlockedFallback = null;
+          for (const candidate of candidates) {
+            try { if (EVENT_SLUG_RE.test(extractVenueSlug(new URL(candidate)))) continue; } catch { continue; }
+            const check = await verifyWithAddress(candidate, restaurant);
+            if (check === 'confirmed') {
+              resUrl        = candidate;
+              resConfidence = 0.90;
+              resSource     = 'direct_slug';
+              console.log(`      reservation: found (direct slug + address verified, conf=0.90): ${candidate}`);
+              break;
+            }
+            if (check === 'bot_blocked' && !botBlockedFallback) {
+              botBlockedFallback = candidate;
+            }
+          }
+          if (!resUrl && botBlockedFallback) {
+            resUrl        = botBlockedFallback;
+            resConfidence = 0.78;
+            resSource     = 'direct_slug';
+            console.log(`      reservation: found (direct slug, bot-blocked, conf=0.78): ${botBlockedFallback}`);
+          }
+        }
+
+        // Step 4: Tavily domain-filtered search — fallback when no website or
         // website scraping (including Playwright) found nothing.
         if (!resUrl) {
           const query = buildReservationQuery(restaurant);
