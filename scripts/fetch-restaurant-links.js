@@ -123,8 +123,13 @@ function extractVenueSlug(parsedUrl) {
   if (hostname === 'opentable.com') return segments[1] || '';
   if (hostname.includes('tock.com')) return segments[0] || '';
   if (hostname === 'sevenrooms.com') {
+    // Two URL patterns exist:
+    //   /reservations/{slug}/web        → slug is AFTER 'reservations' (ri === 0)
+    //   /explore/{slug}/reservations/…  → slug is BEFORE 'reservations' (ri  >  0)
     const ri = segments.indexOf('reservations');
-    return ri >= 0 ? (segments[ri + 1] || '') : '';
+    if (ri === 0) return segments[1] || '';
+    if (ri  >  0) return segments[ri - 1] || '';
+    return segments[segments.length - 1] || '';
   }
   return segments[segments.length - 1] || '';
 }
@@ -264,6 +269,37 @@ async function validateLink(url, restaurant, fieldType) {
   //   - Some tokens appear, not all → explicit partial match → wrong location → reject
   //     e.g. "on the Hudson" has "hudson" but not "yards" → reject for "Hudson Yards"
   if (fieldType === 'reservation') {
+    // ── Event slug check ────────────────────────────────────────────────────
+    // Catches stored event pages like "russ-daughters-chanukah-2023" that are
+    // still HTTP 200 but are not permanent venue pages.
+    // ── Multi-location chain guard ──────────────────────────────────────────
+    // Catches stored wrong-location URLs like Kyma Flatiron vs Hudson Yards.
+    // If the slug has words beyond the restaurant name + generic filler, at
+    // least one DB location signal must be confirmed inside the slug.
+    try {
+      const parsedResUrl = new URL(url);
+      const venueSlug    = extractVenueSlug(parsedResUrl);
+      if (EVENT_SLUG_RE.test(venueSlug)) {
+        return { valid: false, reason: 'event slug pattern detected' };
+      }
+      const locSignals = [restaurant.area, restaurant.district, restaurant.address].filter(Boolean);
+      const nameSet    = new Set(nameTokens(restaurant.name));
+      const slugWords  = venueSlug.split(/[^a-z0-9]+/).filter(t => t.length > 2);
+      const extraWords = slugWords.filter(w => !nameSet.has(w) && !GENERIC_SLUG_WORDS.has(w));
+      if (extraWords.length > 0 && locSignals.length > 0) {
+        const confirmed = locSignals.some(sig => {
+          const toks = sig.toLowerCase().split(/\s+/).filter(t => t.length > 3);
+          return toks.length > 0 && toks.every(t => venueSlug.includes(t));
+        });
+        if (!confirmed) {
+          return { valid: false, reason: `location not confirmed in venue slug (extra words: ${extraWords.join(', ')})` };
+        }
+      }
+    } catch { /* ignore URL parse errors */ }
+
+    // ── Soft location conflict in page title ────────────────────────────────
+    // Only reject if SOME location tokens appear but not ALL (wrong sub-location
+    // sub-page), e.g. pjclarkes.com/on-the-hudson title has "hudson" but not "yards".
     const locationSignal = restaurant.area || restaurant.district || restaurant.address || null;
     if (locationSignal) {
       const locTokens = locationSignal.toLowerCase().split(/\s+/).filter(t => t.length > 3);
@@ -280,6 +316,35 @@ async function validateLink(url, restaurant, fieldType) {
   }
 
   return { valid: true };
+}
+
+// Fetches a reservation platform URL and checks if the restaurant's street number
+// appears anywhere in the page HTML. The street number (e.g. "501" from "501 W 34th St")
+// is a precise, platform-neutral location signal that sidesteps district naming mismatches
+// (e.g. Google/Resy calling Hudson Yards "Manhattan West").
+//
+// Returns:
+//   'confirmed'   — street number found → high-confidence address match
+//   'bot_blocked' — 403/429 → URL is live but content unreadable; trust the slug
+//   'not_found'   — 200 but street number absent → probably wrong venue
+//   null          — no address on record, connection error, or other HTTP failure
+async function verifyWithAddress(url, restaurant) {
+  if (!restaurant.address) return null;
+  const streetNum = (restaurant.address.match(/^\d+/) || [])[0];
+  if (!streetNum) return null;
+  let res;
+  try {
+    res = await fetch(url, {
+      method:  'GET',
+      headers: { 'User-Agent': BROWSER_UA },
+      signal:  AbortSignal.timeout(VALIDATE_TIMEOUT_MS),
+      redirect: 'follow',
+    });
+  } catch { return null; }
+  if (res.status === 403 || res.status === 429) return 'bot_blocked';
+  if (!res.ok) return null;
+  const html = (await res.text().catch(() => '')).slice(0, 50000);
+  return html.includes(streetNum) ? 'confirmed' : 'not_found';
 }
 
 // Scrapes a restaurant's own website HTML for a self-linked Instagram profile.
@@ -514,10 +579,21 @@ async function findReservationWithPlaywright(websiteUrl, restaurant) {
     const PLATFORM_RE = /https?:\/\/(?:www\.)?(?:resy\.com|opentable\.com|exploretock\.com|tock\.com|sevenrooms\.com)\/[^\s"'<>]+/gi;
     const results = [];
     for (const href of hrefs) {
-      const matches = [...(href || '').matchAll(PLATFORM_RE)];
+      const text = href || '';
+      const matches = [...text.matchAll(PLATFORM_RE)];
       for (const m of matches) {
         const raw = m[0].replace(/["'<>\s].*$/, '');
         try { results.push(new URL(raw)); } catch { /* skip */ }
+      }
+      // Resy widget embed: the resy.com URL may not appear directly — instead the
+      // venue slug is passed as a config value to the widgets.resy.com script.
+      // Pattern: "venue": "papa-san" or venueSlug="papa-san" or data-venue="papa-san"
+      // We reconstruct a canonical resy.com URL from any slug we find this way.
+      const RESY_WIDGET_SLUG_RE = /(?:venue[_-]?slug|venue)["'\s]*[=:]["'\s]*([a-z][a-z0-9-]{1,60})/gi;
+      for (const m of text.matchAll(RESY_WIDGET_SLUG_RE)) {
+        const slug = m[1];
+        if (!slug || EVENT_SLUG_RE.test(slug)) continue;
+        try { results.push(new URL(`https://resy.com/cities/ny/${slug}`)); } catch { /* skip */ }
       }
     }
     return results;
@@ -557,13 +633,24 @@ async function findReservationWithPlaywright(websiteUrl, restaurant) {
     } catch {
       // timeout or navigation error — still try to extract what loaded
     }
-    // Collect all href and src attributes from the live DOM, plus onclick text
+    // Collect reservation platform URLs from the live DOM.
+    // We scan both structured attributes (href/src/onclick/data-*) AND the full
+    // page HTML — this catches URLs embedded in inline <script> blocks, JSON-LD,
+    // data attributes, and Resy/OT widgets that inject their venue URL into the
+    // page text rather than into a plain <a href>.
     const hrefs = await page.evaluate(() => {
       const vals = [];
       document.querySelectorAll('a[href]').forEach(a => vals.push(a.href));
       document.querySelectorAll('iframe[src]').forEach(f => vals.push(f.src));
-      // Some sites encode the reservation URL in a data attribute or onclick
       document.querySelectorAll('[onclick]').forEach(el => vals.push(el.getAttribute('onclick') || ''));
+      // data-* attrs on every element (Resy/OT widgets often use data-url, data-venue-url)
+      document.querySelectorAll('*').forEach(el => {
+        for (const attr of el.getAttributeNames()) {
+          if (attr.startsWith('data-')) vals.push(el.getAttribute(attr) || '');
+        }
+      });
+      // Full page HTML catches URLs in <script> text, JSON-LD, and widget init configs
+      vals.push(document.documentElement.innerHTML.slice(0, 500000));
       return vals;
     }).catch(() => []);
     await context.close();
@@ -695,8 +782,15 @@ function isValidReservationResult(result, restaurant) {
   const combined = `${urlPath} ${(result.title || '').toLowerCase()} ${(result.content || '').toLowerCase()}`;
 
   if (locTokens.length > 1) {
-    // AND logic: every token must appear — prevents partial location matches
-    return locTokens.every(t => combined.includes(t));
+    // AND logic: every token must appear — prevents partial location matches.
+    if (locTokens.every(t => combined.includes(t))) return true;
+    // Location token AND check failed — this can happen when the reservation
+    // platform uses a different neighbourhood name than our DB (e.g. Resy calls
+    // Hudson Yards "Manhattan West"). Fall back to street number matching:
+    // if the DB address starts with a number (e.g. "501 W 34th St"), check
+    // whether that number appears in the Tavily content snippet.
+    const streetNum = (restaurant.address || '').match(/^\d+/)?.[0];
+    return !!(streetNum && combined.includes(streetNum));
   } else {
     return locTokens.some(t => combined.includes(t));
   }
@@ -1004,10 +1098,11 @@ async function main() {
     // ── reservation ───────────────────────────────────
     //
     // Confidence scoring (only links with score ≥ 0.75 are persisted):
-    //   0.90 — static website scrape, liveness confirmed (HTTP 200)
-    //   0.85 — static website scrape, bot-blocked (403/429) — trusted self-link
+    //   0.90 — static website scrape (HTTP 200) or direct slug + address verified
     //   0.88 — Playwright scrape, slug validated
-    //   0.75 — Tavily + location confirmed in result content
+    //   0.85 — static website scrape, bot-blocked (403/429) — trusted self-link
+    //   0.78 — direct slug, bot-blocked — URL exists but address unverifiable
+    //   0.75 — Tavily + location confirmed in result content or street number
     //   0.60 — Tavily + no location signal → rejected, not saved
     if (doReservation) {
       const status = await fieldStatus('reservation', restaurant.reservation);
@@ -1047,7 +1142,54 @@ async function main() {
           }
         }
 
-        // Step 3: Tavily domain-filtered search — fallback when no website or
+        // Step 3a: Direct Resy slug attempt with address verification.
+        //
+        // Catches restaurants where:
+        //   (a) the website's Resy widget doesn't expose a resy.com link in static or
+        //       rendered HTML (e.g. Papa San's widget.resy.com embed), AND
+        //   (b) the Resy page uses a different neighbourhood label than our DB district
+        //       (e.g. Resy says "Manhattan West", our DB says "Hudson Yards"), causing
+        //       the Tavily AND-logic location check to reject a perfectly valid result.
+        //
+        // Strategy: derive a slug from the restaurant name, construct both the new
+        // (cities/new-york-ny/venues/{slug}) and old (cities/ny/{slug}) Resy URL
+        // formats, then verify using the street number from the DB address.  The
+        // street number is a platform-neutral, precise location identifier that
+        // sidesteps district naming discrepancies entirely.
+        //
+        // Confidence:
+        //   0.90 — street number confirmed on the page
+        //   0.78 — bot-blocked (403/429), URL exists but content unreadable
+        if (!resUrl && restaurant.address) {
+          const nameSlug   = nameTokens(restaurant.name).join('-');
+          const candidates = [
+            `https://resy.com/cities/new-york-ny/venues/${nameSlug}`,
+            `https://resy.com/cities/ny/${nameSlug}`,
+          ];
+          let botBlockedFallback = null;
+          for (const candidate of candidates) {
+            try { if (EVENT_SLUG_RE.test(extractVenueSlug(new URL(candidate)))) continue; } catch { continue; }
+            const check = await verifyWithAddress(candidate, restaurant);
+            if (check === 'confirmed') {
+              resUrl        = candidate;
+              resConfidence = 0.90;
+              resSource     = 'direct_slug';
+              console.log(`      reservation: found (direct slug + address verified, conf=0.90): ${candidate}`);
+              break;
+            }
+            if (check === 'bot_blocked' && !botBlockedFallback) {
+              botBlockedFallback = candidate;
+            }
+          }
+          if (!resUrl && botBlockedFallback) {
+            resUrl        = botBlockedFallback;
+            resConfidence = 0.78;
+            resSource     = 'direct_slug';
+            console.log(`      reservation: found (direct slug, bot-blocked, conf=0.78): ${botBlockedFallback}`);
+          }
+        }
+
+        // Step 4: Tavily domain-filtered search — fallback when no website or
         // website scraping (including Playwright) found nothing.
         if (!resUrl) {
           const query = buildReservationQuery(restaurant);
