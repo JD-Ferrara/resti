@@ -247,6 +247,53 @@ async function findInstagramFromWebsite(websiteUrl, restaurant) {
   return null;
 }
 
+// Scrapes a restaurant's own website HTML for a self-linked reservation platform URL.
+// This is the most reliable reservation discovery method: restaurants link their own
+// booking widget, so no name-matching needed — trust the source.
+//
+// Recognises: resy.com, opentable.com, exploretock.com / tock.com, sevenrooms.com
+// Platform-specific venue-page checks prevent returning homepage/search-page URLs.
+async function findReservationFromWebsite(websiteUrl) {
+  let res;
+  try {
+    res = await fetch(websiteUrl, {
+      method: 'GET',
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; RestaurantBot/1.0)' },
+      signal: AbortSignal.timeout(VALIDATE_TIMEOUT_MS),
+      redirect: 'follow',
+    });
+  } catch { return null; }
+
+  if (!res.ok) return null;
+
+  const html = await res.text().catch(() => '');
+
+  const PLATFORM_RE = /https?:\/\/(?:www\.)?(?:resy\.com|opentable\.com|exploretock\.com|tock\.com|sevenrooms\.com)\/[^\s"'<>]+/gi;
+  const matches = [...html.matchAll(PLATFORM_RE)];
+
+  for (const match of matches) {
+    // Strip anything after a quote/angle-bracket/whitespace (HTML attribute boundary)
+    const raw = match[0].replace(/["'<>\s].*$/, '');
+    let parsed;
+    try { parsed = new URL(raw); } catch { continue; }
+
+    const hostname = parsed.hostname.replace(/^www\./, '');
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    if (segments.length < 1) continue;
+
+    // Platform-specific venue-page guards
+    if (hostname === 'resy.com' && !parsed.pathname.includes('/venues/')) continue;
+    if (hostname === 'opentable.com' && !parsed.pathname.match(/^\/r\//)) continue;
+    // exploretock.com / tock.com: one path segment = venue slug — allow it
+    // sevenrooms.com: /reservations/{slug}/web — segments.length >= 2
+
+    // Return canonical URL without tracking query params
+    return `${parsed.protocol}//${parsed.hostname}${parsed.pathname}`;
+  }
+
+  return null;
+}
+
 // ── API callers ───────────────────────────────────────────
 
 // Calls Tavily. Pass an empty includeDomains array (default) for a broad global search.
@@ -640,24 +687,43 @@ async function main() {
     if (doReservation) {
       const status = await fieldStatus('reservation', restaurant.reservation);
       if (status === 'discover') {
-        const query = buildReservationQuery(restaurant);
-        try {
-          const results = await tavilySearch(query, RESERVATION_DOMAINS);
-          madeTavilyCall = true;
-          const match = results.find(r => isValidReservationResult(r, restaurant));
-          if (match) {
-            updates.reservation = match.url;
-            console.log(`      reservation: found: ${match.url}`);
-          } else if (isForce && restaurant.reservation) {
-            console.log(`      reservation: force-kept (not found): ${restaurant.reservation}`);
-          } else {
-            updates.reservation = null;  // known-bad, nothing found → clear it
-            console.log('      reservation: not found — clearing stale value');
-          }
-        } catch (err) {
-          console.error(`      reservation: ERROR: ${err.message}`);
+        let resUrl = null;
+
+        // Step 1: Scrape restaurant's own website for a reservation platform link.
+        // If the website was just discovered this run, use that; else use DB value.
+        const knownWebsite = updates.website || restaurant.website;
+        if (knownWebsite) {
+          resUrl = await findReservationFromWebsite(knownWebsite);
+          if (resUrl) console.log(`      reservation: found (website scrape): ${resUrl}`);
         }
-        await sleep(TAVILY_DELAY_MS);
+
+        // Step 2: Tavily fallback — domain-filtered search on reservation platforms
+        if (!resUrl) {
+          const query = buildReservationQuery(restaurant);
+          try {
+            const results = await tavilySearch(query, RESERVATION_DOMAINS);
+            madeTavilyCall = true;
+            const match = results.find(r => isValidReservationResult(r, restaurant));
+            if (match) {
+              resUrl = match.url;
+              console.log(`      reservation: found (Tavily): ${resUrl}`);
+            }
+          } catch (err) {
+            console.error(`      reservation: Tavily ERROR: ${err.message}`);
+          }
+          await sleep(TAVILY_DELAY_MS);
+        }
+
+        if (resUrl) {
+          updates.reservation = resUrl;
+        } else if (isForce && restaurant.reservation) {
+          console.log(`      reservation: force-kept (not found): ${restaurant.reservation}`);
+        } else if (restaurant.reservation) {
+          updates.reservation = null;
+          console.log('      reservation: not found — clearing stale value');
+        } else {
+          console.log('      reservation: not found');
+        }
       }
     }
 
