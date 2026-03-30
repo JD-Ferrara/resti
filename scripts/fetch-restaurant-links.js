@@ -137,14 +137,17 @@ function isValidReservation(url, restaurant) {
 // Returns { valid: true } or { valid: false, reason: string }
 async function validateLink(url, restaurant, fieldType) {
   // ── Structural check (instagram + reservation) ─────────
-  // Re-running these catches renamed restaurants without hitting the network.
-  // e.g. old URL contains "nizuc" but current name is "Talavera" → fail immediately.
   if (fieldType === 'instagram' && !isValidInstagram(url, restaurant)) {
     return { valid: false, reason: 'URL slug does not match current restaurant name' };
   }
   if (fieldType === 'reservation' && !isValidReservation(url, restaurant)) {
     return { valid: false, reason: 'URL path does not match current restaurant name' };
   }
+
+  // Instagram: structural check is all we need — skip HTTP entirely.
+  // Instagram blocks bots with 429/403, making liveness checks unreliable and
+  // causing valid stored URLs to appear stale.
+  if (fieldType === 'instagram') return { valid: true };
 
   // ── HTTP liveness + content check ─────────────────────
   let res;
@@ -163,24 +166,46 @@ async function validateLink(url, restaurant, fieldType) {
     return { valid: false, reason: `HTTP ${res.status}` };
   }
 
-  // For website: check that the current restaurant name appears in the page title.
-  // Instagram og:title is unreliable (login walls), and reservation URL slugs are
-  // already verified structurally above.
+  const html = (await res.text().catch(() => '')).slice(0, 10000).toLowerCase();
+
+  // Normalise text the same way nameTokens normalises names:
+  // strip apostrophes/backticks then replace remaining punctuation with spaces.
+  // Without this, "clarkes" (from nameTokens) won't match "clarke's" in a title.
+  const normalise = s => s.replace(/[''`\u2018\u2019]/g, '').replace(/[^a-z0-9\s]/g, ' ');
+
+  const titleMatch = html.match(/<title[^>]*>([^<]{1,200})<\/title>/);
+  const title      = titleMatch ? normalise(titleMatch[1]) : '';
+
+  // For website: restaurant name must appear in page title / og:title
   if (fieldType === 'website') {
-    const html = (await res.text().catch(() => '')).slice(0, 10000).toLowerCase();
-    const titleMatch = html.match(/<title[^>]*>([^<]{1,200})<\/title>/);
-    const title      = titleMatch ? titleMatch[1] : '';
-    const ogMatch    = html.match(/property="og:title"[^>]*content="([^"]{1,200})"/)
-                    || html.match(/content="([^"]{1,200})"[^>]*property="og:title"/);
-    const ogTitle    = ogMatch ? ogMatch[1] : '';
-    const combined   = `${title} ${ogTitle}`;
-    const tokens     = nameTokens(restaurant.name);
+    const ogMatch  = html.match(/property="og:title"[^>]*content="([^"]{1,200})"/)
+                  || html.match(/content="([^"]{1,200})"[^>]*property="og:title"/);
+    const ogTitle  = ogMatch ? normalise(ogMatch[1]) : '';
+    const combined = `${title} ${ogTitle}`;
+    const tokens   = nameTokens(restaurant.name);
     if (!tokens.some(t => combined.includes(t))) {
       return { valid: false, reason: 'restaurant name not found in page title' };
     }
-  } else {
-    // Drain the body to avoid socket leaks (instagram/reservation GET)
-    await res.body?.cancel?.();
+  }
+
+  // For reservation: location must be confirmed in the page title + URL path.
+  // Uses AND logic for multi-word locations — prevents "P.J. Clarke's on the Hudson"
+  // (has "hudson") from passing as "Hudson Yards" (requires "hudson" AND "yards").
+  if (fieldType === 'reservation') {
+    const locationSignal = restaurant.area || restaurant.district || restaurant.address || null;
+    if (locationSignal) {
+      const locTokens = locationSignal.toLowerCase().split(/\s+/).filter(t => t.length > 3);
+      if (locTokens.length > 0) {
+        const urlPath  = (() => { try { return new URL(url).pathname.toLowerCase(); } catch { return ''; } })();
+        const combined = `${urlPath} ${title}`;
+        const passes   = locTokens.length > 1
+          ? locTokens.every(t => combined.includes(t))   // AND — all tokens required
+          : locTokens.some(t => combined.includes(t));   // OR — single token
+        if (!passes) {
+          return { valid: false, reason: `location "${locationSignal}" not confirmed — wrong venue?` };
+        }
+      }
+    }
   }
 
   return { valid: true };
@@ -485,16 +510,56 @@ async function main() {
               found = true;
             }
           } catch (err) {
-            console.error(`      website    : ERROR: ${err.message}`);
+            console.error(`      website    : Google Places ERROR: ${err.message}`);
+          }
+        }
+
+        // Step 3: Tavily web search as final fallback.
+        // Handles cases where the Google Places listing lags behind a restaurant
+        // rename (e.g. still indexed as "NIZUC" when searching "Talavera").
+        if (!found) {
+          // Domains that are never the restaurant's own website
+          const NON_WEBSITE_DOMAINS = [
+            'yelp.com', 'tripadvisor.com', 'opentable.com', 'resy.com', 'tock.com',
+            'exploretock.com', 'sevenrooms.com', 'instagram.com', 'facebook.com',
+            'twitter.com', 'x.com', 'google.com', 'maps.google.com',
+            'eater.com', 'ny.eater.com', 'theinfatuation.com', 'nytimes.com',
+            'timeout.com', 'grubhub.com', 'doordash.com', 'ubereats.com',
+            'seamless.com', 'guide.michelin.com', 'bonappetit.com', 'vogue.com',
+          ];
+          const loc = restaurant.area || restaurant.district || restaurant.address;
+          const wsQuery = loc
+            ? `"${restaurant.name}" restaurant "${loc}" official website`
+            : `"${restaurant.name}" restaurant New York City official website`;
+          try {
+            const results = await tavilySearch(wsQuery);
+            madeTavilyCall = true;
+            const normalise = s => s.replace(/[''`\u2018\u2019]/g, '').replace(/[^a-z0-9\s]/g, ' ');
+            const tokens = nameTokens(restaurant.name);
+            for (const result of results) {
+              let hostname;
+              try { hostname = new URL(result.url).hostname.replace(/^www\./, ''); } catch { continue; }
+              if (NON_WEBSITE_DOMAINS.some(d => hostname === d || hostname.endsWith('.' + d))) continue;
+              const titleNorm = normalise((result.title || '').toLowerCase());
+              if (!tokens.some(t => titleNorm.includes(t))) continue;
+              updates.website = result.url;
+              console.log(`      website    : found (Tavily): ${result.url}`);
+              found = true;
+              break;
+            }
+          } catch (err) {
+            console.error(`      website    : Tavily ERROR: ${err.message}`);
           }
         }
 
         if (!found) {
           if (isForce && restaurant.website) {
             console.log(`      website    : force-kept (not found): ${restaurant.website}`);
-          } else {
+          } else if (restaurant.website) {
             updates.website = null;
             console.log('      website    : not found — clearing stale value');
+          } else {
+            console.log('      website    : not found');
           }
         }
       }
