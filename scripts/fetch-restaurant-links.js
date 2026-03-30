@@ -62,6 +62,20 @@ const TEXT_SEARCH_URL     = 'https://places.googleapis.com/v1/places:searchText'
 const VALID_FIELDS    = ['website', 'instagram', 'reservation'];
 const VALIDATE_TIMEOUT_MS = 5000;  // per-URL HTTP check timeout
 
+// Browser-like User-Agent for HTTP fetches — reduces 403s from bot-wary sites.
+const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+// Words that commonly appear in reservation platform URL slugs but are NOT location-specific.
+// Used to isolate the "extra" words in a slug that actually identify a venue location.
+const GENERIC_SLUG_WORDS = new Set([
+  'new', 'york', 'nyc', 'city', 'the', 'and', 'restaurant', 'bar', 'cafe',
+  'grill', 'kitchen', 'house', 'room', 'dining', 'ny', 'res',
+]);
+
+// Resy/Tock slugs that contain a 4-digit year or event keywords are time-limited
+// event pages, not permanent venue pages (e.g. "russ-daughters-chanukah-2023").
+const EVENT_SLUG_RE = /\b\d{4}\b|chanukah|hanukkah|christmas|thanksgiving|holiday|special|event\b|brunch\b|nye\b|xmas/i;
+
 // ── Helpers ───────────────────────────────────────────────
 
 function sleep(ms) {
@@ -79,6 +93,31 @@ function nameTokens(name) {
     .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
     .filter(t => t.length > 2);
+}
+
+// ── Helpers (continued) ───────────────────────────────────
+
+// Returns the venue-specific slug from a reservation platform URL.
+// Different platforms use different path structures:
+//   Resy (new): /cities/{city}/venues/{slug}  → segment after "venues"
+//   Resy (old): /cities/{city}/{slug}          → last segment
+//   OpenTable:  /r/{slug}                      → segment 1
+//   Tock:       /{slug}                        → segment 0
+//   SevenRooms: /reservations/{slug}/web       → segment after "reservations"
+function extractVenueSlug(parsedUrl) {
+  const hostname = parsedUrl.hostname.replace(/^www\./, '');
+  const segments = parsedUrl.pathname.split('/').filter(Boolean);
+  if (hostname === 'resy.com') {
+    const vi = segments.indexOf('venues');
+    return (vi >= 0 ? segments[vi + 1] : segments[segments.length - 1]) || '';
+  }
+  if (hostname === 'opentable.com') return segments[1] || '';
+  if (hostname.includes('tock.com')) return segments[0] || '';
+  if (hostname === 'sevenrooms.com') {
+    const ri = segments.indexOf('reservations');
+    return ri >= 0 ? (segments[ri + 1] || '') : '';
+  }
+  return segments[segments.length - 1] || '';
 }
 
 // ── Validators ────────────────────────────────────────────
@@ -154,7 +193,7 @@ async function validateLink(url, restaurant, fieldType) {
   try {
     res = await fetch(url, {
       method: 'GET',
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; RestaurantBot/1.0)' },
+      headers: { 'User-Agent': BROWSER_UA },
       signal: AbortSignal.timeout(VALIDATE_TIMEOUT_MS),
       redirect: 'follow',
     });
@@ -176,7 +215,10 @@ async function validateLink(url, restaurant, fieldType) {
   const titleMatch = html.match(/<title[^>]*>([^<]{1,200})<\/title>/);
   const title      = titleMatch ? normalise(titleMatch[1]) : '';
 
-  // For website: restaurant name must appear in page title / og:title
+  // For website: restaurant name must appear in page title / og:title.
+  // Also apply soft location conflict check: if the page title mentions SOME
+  // but not ALL of a multi-word location signal, it's a wrong-location sub-page
+  // (e.g. pjclarkes.com/on-the-hudson has "hudson" but not "yards" → wrong location).
   if (fieldType === 'website') {
     const ogMatch  = html.match(/property="og:title"[^>]*content="([^"]{1,200})"/)
                   || html.match(/content="([^"]{1,200})"[^>]*property="og:title"/);
@@ -185,6 +227,18 @@ async function validateLink(url, restaurant, fieldType) {
     const tokens   = nameTokens(restaurant.name);
     if (!tokens.some(t => combined.includes(t))) {
       return { valid: false, reason: 'restaurant name not found in page title' };
+    }
+    // Soft location conflict (same logic as reservation)
+    const locSig = restaurant.area || restaurant.district || restaurant.address || null;
+    if (locSig) {
+      const locToks = locSig.toLowerCase().split(/\s+/).filter(t => t.length > 3);
+      if (locToks.length > 1) {
+        const anyPresent = locToks.some(t => combined.includes(t));
+        const allPresent = locToks.every(t => combined.includes(t));
+        if (anyPresent && !allPresent) {
+          return { valid: false, reason: `location conflict in website title for "${locSig}"` };
+        }
+      }
     }
   }
 
@@ -257,34 +311,35 @@ async function findInstagramFromWebsite(websiteUrl, restaurant) {
 
 // Scrapes a restaurant's own website HTML for a self-linked reservation platform URL.
 //
-// Recognises: resy.com, opentable.com, exploretock.com / tock.com, sevenrooms.com
+// WHAT IT CHECKS:
+//   1. Platform guard — Resy (both URL formats), OT, Tock, SevenRooms venue-page depth
+//   2. Event slug check — rejects year patterns / event keywords (Russ & Daughters)
+//   3. Liveness — HTTP 200; 403/429 treated as valid (bot-blocked but URL exists)
+//   4. Venue slug extra-word check — if slug has words beyond the restaurant name,
+//      they must match at least one of our location signals (area/district/address).
+//      This is the multi-location chain guard: catches Kyma Flatiron, PJ Clarke's
+//      Third Ave, Jajaja West Village, etc., when the wrong location is linked first.
+//      Single-location restaurants have no extra words → check is skipped entirely.
 //
-// Validation strategy for website-scraped URLs differs from stored-link validation:
-//   - Name-token check is SKIPPED — the restaurant linked to their own booking page,
-//     so the slug can legitimately differ (e.g. Talavera whose Sevenrooms account is
-//     still registered as "nizuc" from the rebrand).
-//   - Liveness (HTTP 200) is checked — catches dead event links (Russ & Daughters).
-//   - Soft location conflict is checked — only rejects if SOME but not ALL location
-//     tokens appear in the URL + page title. If none appear (single-location restaurant),
-//     we accept. This handles multi-location chains (PJ Clarke's) while not penalising
-//     single-location restaurants whose booking pages don't mention their neighbourhood.
+// WHAT IT SKIPS:
+//   - Name-token check — slug can legitimately differ from current name (Talavera/NIZUC)
 //
-// Subpage fallback: tries /reservations, /reserve, /book after the homepage — catches
-// JS-heavy sites where the booking button is client-rendered on the homepage but
-// present as a plain anchor on a dedicated page.
+// SUBPAGE FALLBACK: also tries /reservations, /reserve, /book — for JS-heavy sites
+// where the booking button is not in the homepage's static HTML.
 async function findReservationFromWebsite(websiteUrl, restaurant) {
   const PLATFORM_RE = /https?:\/\/(?:www\.)?(?:resy\.com|opentable\.com|exploretock\.com|tock\.com|sevenrooms\.com)\/[^\s"'<>]+/gi;
 
-  const locationSignal = restaurant.area || restaurant.district || restaurant.address || null;
-  const locTokens = locationSignal
-    ? locationSignal.toLowerCase().split(/\s+/).filter(t => t.length > 3)
-    : [];
+  // Collect all location signals for multi-location discrimination.
+  // We check area, district, AND address so that naming mismatches are more
+  // forgiving (e.g. Kyma: area="Manhattan West", address="28 Hudson Yards" —
+  // the Resy slug "kyma-hudson-yards" matches the address even if not the area).
+  const locSignals = [restaurant.area, restaurant.district, restaurant.address].filter(Boolean);
 
   const tryFetch = async (url) => {
     try {
       const res = await fetch(url, {
         method: 'GET',
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; RestaurantBot/1.0)' },
+        headers: { 'User-Agent': BROWSER_UA },
         signal: AbortSignal.timeout(VALIDATE_TIMEOUT_MS),
         redirect: 'follow',
       });
@@ -319,36 +374,69 @@ async function findReservationFromWebsite(websiteUrl, restaurant) {
       // sevenrooms.com: /reservations/{slug}/web — segments.length >= 2
 
       const candidateUrl = `${parsed.protocol}//${parsed.hostname}${parsed.pathname}`;
+      const venueSlug    = extractVenueSlug(parsed);
 
-      // Liveness check: HTTP 200 required.
-      // Catches dead event links (e.g. Russ & Daughters Chanukah 2023 Resy page).
-      let liveRes;
+      // Event check: year (2023, 2024) or event keyword in slug → skip event pages.
+      if (EVENT_SLUG_RE.test(venueSlug)) {
+        console.log(`      reservation: website candidate rejected (event slug): ${candidateUrl}`);
+        continue;
+      }
+
+      // Liveness check: fetch the reservation platform page.
+      // 403/429 = bot-blocked, not dead. The URL exists and was self-linked.
+      // Trust it; fall through to slug-based location check without page content.
+      let liveRes, pageTitle = '';
       try {
         liveRes = await fetch(candidateUrl, {
           method:  'GET',
-          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; RestaurantBot/1.0)' },
+          headers: { 'User-Agent': BROWSER_UA },
           signal:  AbortSignal.timeout(VALIDATE_TIMEOUT_MS),
           redirect: 'follow',
         });
       } catch { continue; }
 
       if (!liveRes.ok) {
-        console.log(`      reservation: website candidate rejected (HTTP ${liveRes.status}): ${candidateUrl}`);
-        continue;
+        if (liveRes.status === 403 || liveRes.status === 429) {
+          // Bot-blocked. URL is live — trust the self-link and use slug checks only.
+        } else {
+          console.log(`      reservation: website candidate rejected (HTTP ${liveRes.status}): ${candidateUrl}`);
+          continue;
+        }
+      } else {
+        // 200: read page title for richer location confirmation
+        const pageHtml = (await liveRes.text().catch(() => '')).slice(0, 10000).toLowerCase();
+        const normalise = s => s.replace(/[''`\u2018\u2019]/g, '').replace(/[^a-z0-9\s]/g, ' ');
+        const titleM   = pageHtml.match(/<title[^>]*>([^<]{1,200})<\/title>/);
+        pageTitle = titleM ? normalise(titleM[1]) : '';
       }
 
-      // Soft location conflict check (only when ≥2-token location signal is available).
-      // Reject only if SOME but not ALL location tokens appear — see validateLink comment.
-      if (locTokens.length > 1) {
-        const pageHtml  = (await liveRes.text().catch(() => '')).slice(0, 10000).toLowerCase();
-        const normalise = s => s.replace(/[''`\u2018\u2019]/g, '').replace(/[^a-z0-9\s]/g, ' ');
-        const titleM    = pageHtml.match(/<title[^>]*>([^<]{1,200})<\/title>/);
-        const title     = titleM ? normalise(titleM[1]) : '';
-        const combined  = `${parsed.pathname.toLowerCase()} ${title}`;
-        const anyPresent = locTokens.some(t => combined.includes(t));
-        const allPresent = locTokens.every(t => combined.includes(t));
-        if (anyPresent && !allPresent) {
-          console.log(`      reservation: website candidate rejected (location conflict): ${candidateUrl}`);
+      // Multi-location chain guard using venue slug extra-word analysis.
+      //
+      // If the slug has words BEYOND the restaurant name (and generic filler words),
+      // those extra words identify a specific location. We require that at least one
+      // of our location signals (area/district/address) is fully confirmed in the
+      // slug + page title.
+      //
+      // Examples of extra-word slugs:
+      //   "p-j-clarkes-on-the-hudson"    → extra: ["hudson"]          → wrong location
+      //   "p-j-clarkes-third-avenue"     → extra: ["third", "avenue"] → wrong location
+      //   "kyma-flatiron"                → extra: ["flatiron"]        → wrong location
+      //   "jajaja-mexicana-west-village" → extra: ["west", "village"] → wrong location
+      //
+      // Examples of single-location slugs (no extra words → check skipped):
+      //   "spygold", "papa-san", "limusina-new-york" (york/new are GENERIC)
+      const nameSet    = new Set(nameTokens(restaurant.name));
+      const slugWords  = venueSlug.split(/[^a-z0-9]+/).filter(t => t.length > 2);
+      const extraWords = slugWords.filter(w => !nameSet.has(w) && !GENERIC_SLUG_WORDS.has(w));
+
+      if (extraWords.length > 0 && locSignals.length > 0) {
+        const slugAndTitle = `${venueSlug} ${pageTitle}`;
+        const confirmed = locSignals.some(sig => {
+          const toks = sig.toLowerCase().split(/\s+/).filter(t => t.length > 3);
+          return toks.length > 0 && toks.every(t => slugAndTitle.includes(t));
+        });
+        if (!confirmed) {
+          console.log(`      reservation: website candidate rejected (location not in slug/title): ${candidateUrl}`);
           continue;
         }
       }
@@ -449,6 +537,12 @@ async function googlePlacesTextSearch(name, address) {
 // (which has "hudson" but not "yards") is correctly rejected.
 function isValidReservationResult(result, restaurant) {
   if (!isValidReservation(result.url, restaurant)) return false;
+
+  // Reject event pages found by Tavily (e.g. old catering / holiday event Resy pages)
+  try {
+    const venueSlug = extractVenueSlug(new URL(result.url));
+    if (EVENT_SLUG_RE.test(venueSlug)) return false;
+  } catch { /* ignore parse error */ }
 
   // Derive location signal: prefer area (most specific), then district, then address
   const locationSignal = restaurant.area || restaurant.district || restaurant.address || null;
