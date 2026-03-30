@@ -188,21 +188,29 @@ async function validateLink(url, restaurant, fieldType) {
     }
   }
 
-  // For reservation: location must be confirmed in the page title + URL path.
-  // Uses AND logic for multi-word locations — prevents "P.J. Clarke's on the Hudson"
-  // (has "hudson") from passing as "Hudson Yards" (requires "hudson" AND "yards").
+  // For reservation: detect location conflicts using "soft AND" logic.
+  //
+  // Problem: many reservation platform pages (Resy, OpenTable) don't embed the
+  // neighborhood name in their page title — they just say "Restaurant Name | City | Resy".
+  // Requiring ALL location tokens to be present (hard AND) incorrectly rejects valid
+  // single-location restaurant links (e.g., Limusina's OpenTable page has no "Hudson Yards").
+  //
+  // Soft AND rule: only reject if SOME location tokens appear but not ALL.
+  //   - No tokens appear  → single-location restaurant, neighbourhood not mentioned → accept
+  //   - All tokens appear → correct location confirmed → accept
+  //   - Some tokens appear, not all → explicit partial match → wrong location → reject
+  //     e.g. "on the Hudson" has "hudson" but not "yards" → reject for "Hudson Yards"
   if (fieldType === 'reservation') {
     const locationSignal = restaurant.area || restaurant.district || restaurant.address || null;
     if (locationSignal) {
       const locTokens = locationSignal.toLowerCase().split(/\s+/).filter(t => t.length > 3);
-      if (locTokens.length > 0) {
-        const urlPath  = (() => { try { return new URL(url).pathname.toLowerCase(); } catch { return ''; } })();
-        const combined = `${urlPath} ${title}`;
-        const passes   = locTokens.length > 1
-          ? locTokens.every(t => combined.includes(t))   // AND — all tokens required
-          : locTokens.some(t => combined.includes(t));   // OR — single token
-        if (!passes) {
-          return { valid: false, reason: `location "${locationSignal}" not confirmed — wrong venue?` };
+      if (locTokens.length > 1) {   // need ≥2 tokens to detect a conflict reliably
+        const urlPath   = (() => { try { return new URL(url).pathname.toLowerCase(); } catch { return ''; } })();
+        const combined  = `${urlPath} ${title}`;
+        const anyPresent = locTokens.some(t => combined.includes(t));
+        const allPresent = locTokens.every(t => combined.includes(t));
+        if (anyPresent && !allPresent) {
+          return { valid: false, reason: `location conflict for "${locationSignal}" — wrong venue?` };
         }
       }
     }
@@ -251,16 +259,26 @@ async function findInstagramFromWebsite(websiteUrl, restaurant) {
 //
 // Recognises: resy.com, opentable.com, exploretock.com / tock.com, sevenrooms.com
 //
-// Each candidate URL is passed through validateLink before being accepted.
-// This is essential for multi-location chains (e.g. PJ Clarke's, Jajaja) whose
-// websites link to all their locations — validateLink's location check ensures we
-// only accept the URL that corresponds to THIS specific location.
-// It also rejects stale event links (Resy event pages that 404 or have wrong names).
+// Validation strategy for website-scraped URLs differs from stored-link validation:
+//   - Name-token check is SKIPPED — the restaurant linked to their own booking page,
+//     so the slug can legitimately differ (e.g. Talavera whose Sevenrooms account is
+//     still registered as "nizuc" from the rebrand).
+//   - Liveness (HTTP 200) is checked — catches dead event links (Russ & Daughters).
+//   - Soft location conflict is checked — only rejects if SOME but not ALL location
+//     tokens appear in the URL + page title. If none appear (single-location restaurant),
+//     we accept. This handles multi-location chains (PJ Clarke's) while not penalising
+//     single-location restaurants whose booking pages don't mention their neighbourhood.
 //
-// Fallback: if the homepage yields nothing, tries /reservations, /reserve, /book —
-// catches JS-heavy sites where the booking button isn't in the initial HTML.
+// Subpage fallback: tries /reservations, /reserve, /book after the homepage — catches
+// JS-heavy sites where the booking button is client-rendered on the homepage but
+// present as a plain anchor on a dedicated page.
 async function findReservationFromWebsite(websiteUrl, restaurant) {
   const PLATFORM_RE = /https?:\/\/(?:www\.)?(?:resy\.com|opentable\.com|exploretock\.com|tock\.com|sevenrooms\.com)\/[^\s"'<>]+/gi;
+
+  const locationSignal = restaurant.area || restaurant.district || restaurant.address || null;
+  const locTokens = locationSignal
+    ? locationSignal.toLowerCase().split(/\s+/).filter(t => t.length > 3)
+    : [];
 
   const tryFetch = async (url) => {
     try {
@@ -287,20 +305,55 @@ async function findReservationFromWebsite(websiteUrl, restaurant) {
       const segments = parsed.pathname.split('/').filter(Boolean);
       if (segments.length < 1) continue;
 
-      // Platform-specific venue-page guards
-      if (hostname === 'resy.com' && !parsed.pathname.includes('/venues/')) continue;
+      // Platform-specific venue-page guards.
+      // Resy uses two URL formats:
+      //   new: /cities/{city}/venues/{slug}  (has /venues/)
+      //   old: /cities/{city}/{slug}          (3 segments, starts with "cities")
+      if (hostname === 'resy.com') {
+        const isNewFormat = parsed.pathname.includes('/venues/');
+        const isOldFormat = segments.length >= 3 && segments[0] === 'cities';
+        if (!isNewFormat && !isOldFormat) continue;
+      }
       if (hostname === 'opentable.com' && !parsed.pathname.match(/^\/r\//)) continue;
       // exploretock.com / tock.com: one path segment = venue slug — allow it
       // sevenrooms.com: /reservations/{slug}/web — segments.length >= 2
 
       const candidateUrl = `${parsed.protocol}//${parsed.hostname}${parsed.pathname}`;
 
-      // Validate: liveness + location match before trusting the self-link.
-      // Rejects: wrong location (multi-location chains), stale/event links.
-      const { valid, reason } = await validateLink(candidateUrl, restaurant, 'reservation');
-      if (valid) return candidateUrl;
-      // If invalid, log at debug level and continue to next match in the page
-      console.log(`      reservation: website candidate rejected (${reason}): ${candidateUrl}`);
+      // Liveness check: HTTP 200 required.
+      // Catches dead event links (e.g. Russ & Daughters Chanukah 2023 Resy page).
+      let liveRes;
+      try {
+        liveRes = await fetch(candidateUrl, {
+          method:  'GET',
+          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; RestaurantBot/1.0)' },
+          signal:  AbortSignal.timeout(VALIDATE_TIMEOUT_MS),
+          redirect: 'follow',
+        });
+      } catch { continue; }
+
+      if (!liveRes.ok) {
+        console.log(`      reservation: website candidate rejected (HTTP ${liveRes.status}): ${candidateUrl}`);
+        continue;
+      }
+
+      // Soft location conflict check (only when ≥2-token location signal is available).
+      // Reject only if SOME but not ALL location tokens appear — see validateLink comment.
+      if (locTokens.length > 1) {
+        const pageHtml  = (await liveRes.text().catch(() => '')).slice(0, 10000).toLowerCase();
+        const normalise = s => s.replace(/[''`\u2018\u2019]/g, '').replace(/[^a-z0-9\s]/g, ' ');
+        const titleM    = pageHtml.match(/<title[^>]*>([^<]{1,200})<\/title>/);
+        const title     = titleM ? normalise(titleM[1]) : '';
+        const combined  = `${parsed.pathname.toLowerCase()} ${title}`;
+        const anyPresent = locTokens.some(t => combined.includes(t));
+        const allPresent = locTokens.every(t => combined.includes(t));
+        if (anyPresent && !allPresent) {
+          console.log(`      reservation: website candidate rejected (location conflict): ${candidateUrl}`);
+          continue;
+        }
+      }
+
+      return candidateUrl;
     }
     return null;
   };
@@ -311,7 +364,7 @@ async function findReservationFromWebsite(websiteUrl, restaurant) {
   if (fromHomepage) return fromHomepage;
 
   // Subpage fallback: many JS-heavy restaurant sites render their booking button
-  // client-side, but have a dedicated /reservations page with a real anchor tag.
+  // client-side, but have a dedicated /reservations page with a plain anchor tag.
   try {
     const base = new URL(websiteUrl).origin;
     for (const subpath of ['/reservations', '/reserve', '/book']) {
