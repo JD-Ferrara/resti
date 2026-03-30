@@ -1,4 +1,4 @@
-name: Filtered Places Pipeline
+name: "Step 2: Filtered Places Pipeline"
 
 on:
   workflow_dispatch:
