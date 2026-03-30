@@ -123,8 +123,13 @@ function extractVenueSlug(parsedUrl) {
   if (hostname === 'opentable.com') return segments[1] || '';
   if (hostname.includes('tock.com')) return segments[0] || '';
   if (hostname === 'sevenrooms.com') {
+    // Two URL patterns exist:
+    //   /reservations/{slug}/web        → slug is AFTER 'reservations' (ri === 0)
+    //   /explore/{slug}/reservations/…  → slug is BEFORE 'reservations' (ri  >  0)
     const ri = segments.indexOf('reservations');
-    return ri >= 0 ? (segments[ri + 1] || '') : '';
+    if (ri === 0) return segments[1] || '';
+    if (ri  >  0) return segments[ri - 1] || '';
+    return segments[segments.length - 1] || '';
   }
   return segments[segments.length - 1] || '';
 }
@@ -545,10 +550,21 @@ async function findReservationWithPlaywright(websiteUrl, restaurant) {
     const PLATFORM_RE = /https?:\/\/(?:www\.)?(?:resy\.com|opentable\.com|exploretock\.com|tock\.com|sevenrooms\.com)\/[^\s"'<>]+/gi;
     const results = [];
     for (const href of hrefs) {
-      const matches = [...(href || '').matchAll(PLATFORM_RE)];
+      const text = href || '';
+      const matches = [...text.matchAll(PLATFORM_RE)];
       for (const m of matches) {
         const raw = m[0].replace(/["'<>\s].*$/, '');
         try { results.push(new URL(raw)); } catch { /* skip */ }
+      }
+      // Resy widget embed: the resy.com URL may not appear directly — instead the
+      // venue slug is passed as a config value to the widgets.resy.com script.
+      // Pattern: "venue": "papa-san" or venueSlug="papa-san" or data-venue="papa-san"
+      // We reconstruct a canonical resy.com URL from any slug we find this way.
+      const RESY_WIDGET_SLUG_RE = /(?:venue[_-]?slug|venue)["'\s]*[=:]["'\s]*([a-z][a-z0-9-]{1,60})/gi;
+      for (const m of text.matchAll(RESY_WIDGET_SLUG_RE)) {
+        const slug = m[1];
+        if (!slug || EVENT_SLUG_RE.test(slug)) continue;
+        try { results.push(new URL(`https://resy.com/cities/ny/${slug}`)); } catch { /* skip */ }
       }
     }
     return results;
@@ -588,13 +604,24 @@ async function findReservationWithPlaywright(websiteUrl, restaurant) {
     } catch {
       // timeout or navigation error — still try to extract what loaded
     }
-    // Collect all href and src attributes from the live DOM, plus onclick text
+    // Collect reservation platform URLs from the live DOM.
+    // We scan both structured attributes (href/src/onclick/data-*) AND the full
+    // page HTML — this catches URLs embedded in inline <script> blocks, JSON-LD,
+    // data attributes, and Resy/OT widgets that inject their venue URL into the
+    // page text rather than into a plain <a href>.
     const hrefs = await page.evaluate(() => {
       const vals = [];
       document.querySelectorAll('a[href]').forEach(a => vals.push(a.href));
       document.querySelectorAll('iframe[src]').forEach(f => vals.push(f.src));
-      // Some sites encode the reservation URL in a data attribute or onclick
       document.querySelectorAll('[onclick]').forEach(el => vals.push(el.getAttribute('onclick') || ''));
+      // data-* attrs on every element (Resy/OT widgets often use data-url, data-venue-url)
+      document.querySelectorAll('*').forEach(el => {
+        for (const attr of el.getAttributeNames()) {
+          if (attr.startsWith('data-')) vals.push(el.getAttribute(attr) || '');
+        }
+      });
+      // Full page HTML catches URLs in <script> text, JSON-LD, and widget init configs
+      vals.push(document.documentElement.innerHTML.slice(0, 500000));
       return vals;
     }).catch(() => []);
     await context.close();
