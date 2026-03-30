@@ -264,6 +264,37 @@ async function validateLink(url, restaurant, fieldType) {
   //   - Some tokens appear, not all → explicit partial match → wrong location → reject
   //     e.g. "on the Hudson" has "hudson" but not "yards" → reject for "Hudson Yards"
   if (fieldType === 'reservation') {
+    // ── Event slug check ────────────────────────────────────────────────────
+    // Catches stored event pages like "russ-daughters-chanukah-2023" that are
+    // still HTTP 200 but are not permanent venue pages.
+    // ── Multi-location chain guard ──────────────────────────────────────────
+    // Catches stored wrong-location URLs like Kyma Flatiron vs Hudson Yards.
+    // If the slug has words beyond the restaurant name + generic filler, at
+    // least one DB location signal must be confirmed inside the slug.
+    try {
+      const parsedResUrl = new URL(url);
+      const venueSlug    = extractVenueSlug(parsedResUrl);
+      if (EVENT_SLUG_RE.test(venueSlug)) {
+        return { valid: false, reason: 'event slug pattern detected' };
+      }
+      const locSignals = [restaurant.area, restaurant.district, restaurant.address].filter(Boolean);
+      const nameSet    = new Set(nameTokens(restaurant.name));
+      const slugWords  = venueSlug.split(/[^a-z0-9]+/).filter(t => t.length > 2);
+      const extraWords = slugWords.filter(w => !nameSet.has(w) && !GENERIC_SLUG_WORDS.has(w));
+      if (extraWords.length > 0 && locSignals.length > 0) {
+        const confirmed = locSignals.some(sig => {
+          const toks = sig.toLowerCase().split(/\s+/).filter(t => t.length > 3);
+          return toks.length > 0 && toks.every(t => venueSlug.includes(t));
+        });
+        if (!confirmed) {
+          return { valid: false, reason: `location not confirmed in venue slug (extra words: ${extraWords.join(', ')})` };
+        }
+      }
+    } catch { /* ignore URL parse errors */ }
+
+    // ── Soft location conflict in page title ────────────────────────────────
+    // Only reject if SOME location tokens appear but not ALL (wrong sub-location
+    // sub-page), e.g. pjclarkes.com/on-the-hudson title has "hudson" but not "yards".
     const locationSignal = restaurant.area || restaurant.district || restaurant.address || null;
     if (locationSignal) {
       const locTokens = locationSignal.toLowerCase().split(/\s+/).filter(t => t.length > 3);
