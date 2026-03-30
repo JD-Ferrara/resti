@@ -1,4 +1,4 @@
-name: "Links Pipeline — Fetch Website / Instagram / Reservation"
+name: "Step 4: Links Pipeline — Fetch Website / Instagram / Reservation"
 # Populates website, instagram, reservation, reservation_platform, and
 # reservation_confidence columns on the restaurants table.
 #
