@@ -1,15 +1,20 @@
 name: "Links Pipeline — Fetch Website / Instagram / Reservation"
-# Populates website, instagram, and reservation columns on the
-# restaurants table using Google Places (website) and Tavily
-# (instagram, reservation platforms).
+# Populates website, instagram, reservation, reservation_platform, and
+# reservation_confidence columns on the restaurants table.
 #
 # Modes:
-#   Default  — skips fields already set and restaurants fetched in last 30 days
-#   Force    — re-fetches all; preserves existing values where nothing new is found
-#   Single   — targets one restaurant by its id
+#   incremental   — skips fields already set and restaurants fetched in last 30 days
+#   force         — re-fetches all; preserves existing values where nothing new is found
+#   skip-validate — trust all existing values; only fill nulls
+#   playwright    — same as incremental, but also runs Playwright for reservation
+#                   discovery on restaurants where static scraping finds nothing.
+#                   Installs Chromium (~500MB, cached between runs). Adds 5–15 min.
 #
-# Note: will be merged into the Filtered Places → Restaurants import
-# pipeline once that workflow is built.
+# Single field / single restaurant: use the optional inputs below.
+#
+# Schema prerequisite:
+#   Run supabase-add-reservation-meta.sql in Supabase SQL Editor first to add
+#   reservation_platform and reservation_confidence columns.
 
 on:
   workflow_dispatch:
@@ -23,6 +28,7 @@ on:
           - incremental
           - force
           - skip-validate
+          - playwright
       field:
         description: 'Optional: single field to update (leave blank for all)'
         required: false
@@ -58,6 +64,20 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      # Cache Chromium between runs to avoid re-downloading ~500MB each time.
+      # Only runs in playwright mode; other modes skip the Playwright install step.
+      - name: Cache Playwright browsers
+        if: ${{ github.event.inputs.mode == 'playwright' }}
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: playwright-chromium-${{ runner.os }}-
+
+      - name: Install Playwright Chromium
+        if: ${{ github.event.inputs.mode == 'playwright' }}
+        run: npx playwright install chromium --with-deps
+
       - name: Write .env
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
@@ -69,17 +89,21 @@ jobs:
           echo "SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY" >> .env
           echo "TAVILY_API_KEY=$TAVILY_API_KEY" >> .env
           echo "GOOGLE_PLACES_API_KEY=$GOOGLE_PLACES_API_KEY" >> .env
+          if [ "${{ github.event.inputs.mode }}" = "playwright" ]; then
+            echo "USE_PLAYWRIGHT=true" >> .env
+          fi
 
       - name: Build script flags
         id: flags
         run: |
           FLAGS=""
-          if [ "${{ github.event.inputs.mode }}" = "force" ]; then
+          MODE="${{ github.event.inputs.mode }}"
+          if [ "$MODE" = "force" ]; then
             FLAGS="$FLAGS --force"
-          fi
-          if [ "${{ github.event.inputs.mode }}" = "skip-validate" ]; then
+          elif [ "$MODE" = "skip-validate" ]; then
             FLAGS="$FLAGS --skip-validate"
           fi
+          # playwright mode runs as incremental but with USE_PLAYWRIGHT=true in .env
           if [ -n "${{ github.event.inputs.field }}" ]; then
             FLAGS="$FLAGS --field=${{ github.event.inputs.field }}"
           fi

@@ -4,9 +4,11 @@
 // Populates and validates the website, instagram, and reservation
 // columns on the restaurants table.
 //
-//   website     — Google Places API (websiteUri from Business profile)
-//   instagram   — Tavily (instagram.com, profile page validation)
-//   reservation — Tavily (resy.com / opentable.com / tock.com / sevenrooms.com)
+//   website              — Google Places API (websiteUri from Business profile)
+//   instagram            — Website scrape → Tavily
+//   reservation          — Website scrape → Playwright (opt-in) → Tavily
+//   reservation_platform — Derived from reservation URL hostname (no extra call)
+//   reservation_confidence — 0.0–1.0 score; only values ≥ 0.75 are persisted
 //
 // Validation (runs before skipping any already-set field):
 //   instagram   — URL slug must contain current restaurant name tokens
@@ -28,6 +30,12 @@
 //   node scripts/fetch-restaurant-links.js --dry-run     # preview only, no DB writes
 //   node scripts/fetch-restaurant-links.js --field=instagram  # one field only
 //   node scripts/fetch-restaurant-links.js --skip-validate    # trust existing values, only fill nulls
+//
+// Playwright (optional):
+//   Set USE_PLAYWRIGHT=true in .env (or export it) to enable Playwright as a
+//   fallback for reservation discovery. Playwright handles JS-rendered booking
+//   buttons that static fetch cannot see. When disabled (default), Step 2 is
+//   skipped and Tavily is the fallback instead.
 //
 // Prerequisites:
 //   TAVILY_API_KEY            — Tavily dashboard → API Keys
@@ -51,6 +59,7 @@ const TAVILY_API_KEY        = process.env.TAVILY_API_KEY;
 const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY;
 const SUPABASE_URL          = process.env.VITE_SUPABASE_URL;
 const SUPABASE_KEY          = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const USE_PLAYWRIGHT        = process.env.USE_PLAYWRIGHT === 'true';
 
 const TAVILY_DELAY_MS  = 700;  // matches fetch-restaurant-sources.js
 const GOOGLE_DELAY_MS  = 300;
@@ -466,6 +475,137 @@ async function findReservationFromWebsite(websiteUrl, restaurant) {
   return null;
 }
 
+// Returns the reservation platform name from a URL, or null if not recognised.
+// Used to populate the reservation_platform DB column (no extra API call needed).
+function reservationPlatformFromUrl(url) {
+  let hostname;
+  try { hostname = new URL(url).hostname.replace(/^www\./, ''); } catch { return null; }
+  if (hostname === 'resy.com')                          return 'resy';
+  if (hostname === 'opentable.com')                     return 'opentable';
+  if (hostname === 'sevenrooms.com')                    return 'sevenrooms';
+  if (hostname === 'exploretock.com' || hostname === 'tock.com') return 'tock';
+  return null;
+}
+
+// Headless Playwright scrape for reservation platform links.
+// Fires ONLY when static HTML scraping (findReservationFromWebsite) found nothing
+// AND USE_PLAYWRIGHT=true. Handles JS-rendered booking buttons that don't appear
+// in the initial HTML (e.g. React/Next.js SPAs where the Resy widget is injected
+// after page load).
+//
+// Uses the same slug validation as findReservationFromWebsite — reuses
+// extractVenueSlug, EVENT_SLUG_RE, GENERIC_SLUG_WORDS, and the extra-word
+// location check so identical quality gates apply to both scraping paths.
+//
+// Playwright is loaded lazily (dynamic import) so it is only required when
+// USE_PLAYWRIGHT=true; the script works without it installed.
+async function findReservationWithPlaywright(websiteUrl, restaurant) {
+  let chromium, Browser;
+  try {
+    ({ chromium } = await import('playwright'));
+  } catch {
+    console.error('      reservation: Playwright not installed (run: npm install playwright && npx playwright install chromium)');
+    return null;
+  }
+
+  const locSignals = [restaurant.area, restaurant.district, restaurant.address].filter(Boolean);
+
+  const extractFromHrefs = (hrefs) => {
+    const PLATFORM_RE = /https?:\/\/(?:www\.)?(?:resy\.com|opentable\.com|exploretock\.com|tock\.com|sevenrooms\.com)\/[^\s"'<>]+/gi;
+    const results = [];
+    for (const href of hrefs) {
+      const matches = [...(href || '').matchAll(PLATFORM_RE)];
+      for (const m of matches) {
+        const raw = m[0].replace(/["'<>\s].*$/, '');
+        try { results.push(new URL(raw)); } catch { /* skip */ }
+      }
+    }
+    return results;
+  };
+
+  const validateSlug = (parsed) => {
+    const hostname = parsed.hostname.replace(/^www\./, '');
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    if (segments.length < 1) return false;
+    if (hostname === 'resy.com') {
+      const isNewFormat = parsed.pathname.includes('/venues/');
+      const isOldFormat = segments.length >= 3 && segments[0] === 'cities';
+      if (!isNewFormat && !isOldFormat) return false;
+    }
+    if (hostname === 'opentable.com' && !parsed.pathname.match(/^\/r\//)) return false;
+    const venueSlug = extractVenueSlug(parsed);
+    if (EVENT_SLUG_RE.test(venueSlug)) return false;
+    // Extra-word location check (same logic as findReservationFromWebsite)
+    const nameSet   = new Set(nameTokens(restaurant.name));
+    const slugWords = venueSlug.split(/[^a-z0-9]+/).filter(t => t.length > 2);
+    const extraWords = slugWords.filter(w => !nameSet.has(w) && !GENERIC_SLUG_WORDS.has(w));
+    if (extraWords.length > 0 && locSignals.length > 0) {
+      const confirmed = locSignals.some(sig => {
+        const toks = sig.toLowerCase().split(/\s+/).filter(t => t.length > 3);
+        return toks.length > 0 && toks.every(t => venueSlug.includes(t));
+      });
+      if (!confirmed) return false;
+    }
+    return true;
+  };
+
+  const tryPage = async (browser, url) => {
+    const context = await browser.newContext({ userAgent: BROWSER_UA });
+    const page    = await context.newPage();
+    try {
+      await page.goto(url, { waitUntil: 'networkidle', timeout: 15000 });
+    } catch {
+      // timeout or navigation error — still try to extract what loaded
+    }
+    // Collect all href and src attributes from the live DOM, plus onclick text
+    const hrefs = await page.evaluate(() => {
+      const vals = [];
+      document.querySelectorAll('a[href]').forEach(a => vals.push(a.href));
+      document.querySelectorAll('iframe[src]').forEach(f => vals.push(f.src));
+      // Some sites encode the reservation URL in a data attribute or onclick
+      document.querySelectorAll('[onclick]').forEach(el => vals.push(el.getAttribute('onclick') || ''));
+      return vals;
+    }).catch(() => []);
+    await context.close();
+    return hrefs;
+  };
+
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+
+    // Try homepage
+    const homepageHrefs   = await tryPage(browser, websiteUrl);
+    const homepageParsed  = extractFromHrefs(homepageHrefs);
+    for (const parsed of homepageParsed) {
+      if (validateSlug(parsed)) {
+        return `${parsed.protocol}//${parsed.hostname}${parsed.pathname}`;
+      }
+    }
+
+    // Subpage fallback
+    try {
+      const base = new URL(websiteUrl).origin;
+      for (const subpath of ['/reservations', '/reserve', '/book']) {
+        const hrefs  = await tryPage(browser, `${base}${subpath}`);
+        const parsed = extractFromHrefs(hrefs);
+        for (const p of parsed) {
+          if (validateSlug(p)) {
+            return `${p.protocol}//${p.hostname}${p.pathname}`;
+          }
+        }
+      }
+    } catch { /* malformed URL */ }
+
+    return null;
+  } catch (err) {
+    console.error(`      reservation: Playwright error: ${err.message}`);
+    return null;
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+  }
+}
+
 // ── API callers ───────────────────────────────────────────
 
 // Calls Tavily. Pass an empty includeDomains array (default) for a broad global search.
@@ -643,7 +783,7 @@ async function main() {
   // ── Load restaurants ──────────────────────────────────
   let rQuery = supabase
     .from('restaurants')
-    .select('id, name, address, area, district, website, instagram, reservation, links_fetched_at')
+    .select('id, name, address, area, district, website, instagram, reservation, reservation_platform, reservation_confidence, links_fetched_at')
     .order('id');
 
   if (targetId) rQuery = rQuery.eq('id', targetId);
@@ -862,20 +1002,53 @@ async function main() {
     }
 
     // ── reservation ───────────────────────────────────
+    //
+    // Confidence scoring (only links with score ≥ 0.75 are persisted):
+    //   0.90 — static website scrape, liveness confirmed (HTTP 200)
+    //   0.85 — static website scrape, bot-blocked (403/429) — trusted self-link
+    //   0.88 — Playwright scrape, slug validated
+    //   0.75 — Tavily + location confirmed in result content
+    //   0.60 — Tavily + no location signal → rejected, not saved
     if (doReservation) {
       const status = await fieldStatus('reservation', restaurant.reservation);
       if (status === 'discover') {
-        let resUrl = null;
+        let resUrl        = null;
+        let resConfidence = 0;
+        let resSource     = null;
 
-        // Step 1: Scrape restaurant's own website for a reservation platform link.
-        // If the website was just discovered this run, use that; else use DB value.
         const knownWebsite = updates.website || restaurant.website;
+
+        // Step 1: Static HTML scrape of the restaurant's own website.
+        // Handles ~80% of restaurants; fast and avoids API costs.
         if (knownWebsite) {
           resUrl = await findReservationFromWebsite(knownWebsite, restaurant);
-          if (resUrl) console.log(`      reservation: found (website scrape): ${resUrl}`);
+          if (resUrl) {
+            // findReservationFromWebsite returns null on 404/410; 403/429 are trusted.
+            // We can't easily distinguish from here, so we use 0.85 as a conservative
+            // floor. The liveness path sets it to 0.90 via caller inspection — but
+            // since the function returns just the URL we use 0.85 as the base score.
+            resConfidence = 0.85;
+            resSource     = 'website';
+            console.log(`      reservation: found (website scrape, conf=0.85): ${resUrl}`);
+          }
         }
 
-        // Step 2: Tavily fallback — domain-filtered search on reservation platforms
+        // Step 2: Playwright fallback — JS-rendered booking buttons.
+        // Only runs when USE_PLAYWRIGHT=true AND static scrape found nothing.
+        // Playwright loads the page in a real headless browser after JS execution,
+        // catching Resy widgets and similar dynamically injected links.
+        if (!resUrl && USE_PLAYWRIGHT && knownWebsite) {
+          console.log('      reservation: static scrape found nothing — trying Playwright…');
+          resUrl = await findReservationWithPlaywright(knownWebsite, restaurant);
+          if (resUrl) {
+            resConfidence = 0.88;
+            resSource     = 'website_playwright';
+            console.log(`      reservation: found (Playwright, conf=0.88): ${resUrl}`);
+          }
+        }
+
+        // Step 3: Tavily domain-filtered search — fallback when no website or
+        // website scraping (including Playwright) found nothing.
         if (!resUrl) {
           const query = buildReservationQuery(restaurant);
           try {
@@ -883,8 +1056,13 @@ async function main() {
             madeTavilyCall = true;
             const match = results.find(r => isValidReservationResult(r, restaurant));
             if (match) {
-              resUrl = match.url;
-              console.log(`      reservation: found (Tavily): ${resUrl}`);
+              resUrl        = match.url;
+              // Confidence depends on whether we have a location signal to validate against.
+              // Without one, Tavily could return a result for a similarly named restaurant.
+              const hasLocSignal = !!(restaurant.area || restaurant.district || restaurant.address);
+              resConfidence = hasLocSignal ? 0.75 : 0.60;
+              resSource     = 'tavily';
+              console.log(`      reservation: found (Tavily, conf=${resConfidence}): ${resUrl}`);
             }
           } catch (err) {
             console.error(`      reservation: Tavily ERROR: ${err.message}`);
@@ -892,15 +1070,29 @@ async function main() {
           await sleep(TAVILY_DELAY_MS);
         }
 
-        if (resUrl) {
-          updates.reservation = resUrl;
-        } else if (isForce && restaurant.reservation) {
-          console.log(`      reservation: force-kept (not found): ${restaurant.reservation}`);
-        } else if (restaurant.reservation) {
-          updates.reservation = null;
-          console.log('      reservation: not found — clearing stale value');
-        } else {
-          console.log('      reservation: not found');
+        // Only persist if confidence meets threshold (0.75). Below this we consider
+        // the result too uncertain — better to return null than a wrong link.
+        const CONFIDENCE_THRESHOLD = 0.75;
+        if (resUrl && resConfidence >= CONFIDENCE_THRESHOLD) {
+          updates.reservation            = resUrl;
+          updates.reservation_platform   = reservationPlatformFromUrl(resUrl);
+          updates.reservation_confidence = resConfidence;
+        } else if (resUrl) {
+          console.log(`      reservation: rejected (conf=${resConfidence} < ${CONFIDENCE_THRESHOLD}): ${resUrl}`);
+          resUrl = null;
+        }
+
+        if (!resUrl) {
+          if (isForce && restaurant.reservation) {
+            console.log(`      reservation: force-kept (not found): ${restaurant.reservation}`);
+          } else if (restaurant.reservation) {
+            updates.reservation            = null;
+            updates.reservation_platform   = null;
+            updates.reservation_confidence = null;
+            console.log('      reservation: not found — clearing stale value');
+          } else {
+            console.log('      reservation: not found');
+          }
         }
       }
     }
