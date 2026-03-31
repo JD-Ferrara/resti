@@ -95,11 +95,15 @@ curated, editorial-quality dining guide that locals and visitors use to find gre
 • Hotel restaurants that are genuine dining destinations (not generic lobby cafes)
 
 ━━━ DECISION GUIDANCE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• Use the name, Google place types, editorial summary, address, and price level together.
-• A place labeled "restaurant" or "bar" with a high price level and an editorial summary
-  about the cuisine is almost always relevant.
-• A place labeled "fast_food_restaurant" or "meal_takeaway" with no editorial summary
-  and a low price level is almost always not relevant.
+• Use name, Google place types, price level, rating, and editorial summary together.
+• Google Types + price level are your primary signals:
+  - types ["restaurant"] or ["bar"] with price level $$–$$$$ → almost always INCLUDE,
+    even if editorial summary is "None"
+  - types ["fast_food_restaurant"] or ["meal_takeaway"] with price level $ → almost always EXCLUDE
+• Editorial Summary is a helpful confirming signal when present, NOT a requirement:
+  - "None" means the summary wasn't available at discovery time, not that the place is low quality
+  - Do not penalize a candidate solely because its editorial summary is "None"
+  - When summary is present, use it to distinguish destination-quality from generic
 • When in genuine doubt about a borderline case, lean toward EXCLUDING.
 • Return a classification for EVERY candidate in the batch, in the same order provided.`;
 

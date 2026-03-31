@@ -250,7 +250,7 @@ function placeToRow(place, areaKey, { status = 'pending', exclusionReason = null
 
 // ── Run pipeline for a single area ────────────────────────
 
-async function runArea(areaKey, supabase) {
+async function runArea(areaKey, supabase, { skipEditorial = false } = {}) {
   const areaConfig = SEARCH_AREAS[areaKey];
 
   console.log(`\n${'═'.repeat(56)}`);
@@ -280,17 +280,25 @@ async function runArea(areaKey, supabase) {
   const customDistrictMatched = clipped.filter((p) => p.custom_district).length;
   console.log(`  🗺  Custom district matched: ${customDistrictMatched}/${clipped.length}`);
 
-  // 3c. Editorial summary enrichment — temporarily disabled for billing tier test.
-  //     Re-enable once we confirm discovery bills at Enterprise (not Atmosphere).
-  // const apiKey = process.env.GOOGLE_PLACES_API_KEY;
-  // const editorialMap = await enrichEditorialSummaries(clipped, apiKey);
-  // const clippedWithEditorial = clipped.map((place) => ({
-  //   ...place,
-  //   editorialSummary: editorialMap.get(place.id)
-  //     ? { text: editorialMap.get(place.id) }
-  //     : undefined,
-  // }));
-  const clippedWithEditorial = clipped;
+  // 3c. Editorial summary enrichment (Preferred/Atmosphere tier via Place Details).
+  //     Only called for places that survived quality + polygon filtering (~100–150),
+  //     not the full discovery set (~500–600), keeping Preferred-tier call volume low.
+  //     Skip with --skip-editorial for fast/cheap pipeline runs.
+  let clippedWithEditorial;
+  if (skipEditorial) {
+    console.log('\n[3c/4] Editorial summary enrichment SKIPPED (--skip-editorial)');
+    clippedWithEditorial = clipped;
+  } else {
+    const apiKey = process.env.GOOGLE_PLACES_API_KEY;
+    if (!apiKey) throw new Error('Missing GOOGLE_PLACES_API_KEY in .env (required for editorial summary enrichment). Use --skip-editorial to bypass.');
+    const editorialMap = await enrichEditorialSummaries(clipped, apiKey);
+    clippedWithEditorial = clipped.map((place) => ({
+      ...place,
+      editorialSummary: editorialMap.get(place.id)
+        ? { text: editorialMap.get(place.id) }
+        : undefined,
+    }));
+  }
 
   // 4. Upsert pending rows + purge excluded rows from the table.
   //    Excluded places are not written to raw_places — this keeps the table
@@ -336,14 +344,16 @@ async function run() {
   const areaIdx = args.indexOf('--area');
   const areaArg = areaIdx !== -1 ? args[areaIdx + 1] : null;
   const areaKeys = resolveAreaKeys(areaArg);
+  const skipEditorial = args.includes('--skip-editorial');
 
   const supabase = getSupabase();
 
   console.log(`\n🚀 Places pipeline — ${areaKeys.length} area(s): ${areaKeys.join(', ')}`);
+  if (skipEditorial) console.log('   Editorial summary enrichment: SKIPPED (--skip-editorial)');
 
   const results = [];
   for (const key of areaKeys) {
-    const result = await runArea(key, supabase);
+    const result = await runArea(key, supabase, { skipEditorial });
     results.push(result);
   }
 

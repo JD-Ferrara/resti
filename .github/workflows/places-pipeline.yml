@@ -94,6 +94,12 @@ on:
         type: boolean
         default: false
 
+      # ── Options ───────────────────────────────────────────
+      skip_editorial:
+        description: 'Skip editorial summary enrichment (faster, no Preferred-tier billing)'
+        type: boolean
+        default: false
+
 jobs:
   run-pipeline:
     name: "Step 1: Discover → Filter → Seed pending"
@@ -164,7 +170,12 @@ jobs:
           echo "list=$AREAS" >> $GITHUB_OUTPUT
 
       - name: "Step 1 — Discover + filter (seed-raw-places.js)"
-        run: node scripts/seed-raw-places.js --area ${{ steps.areas.outputs.list }}
+        run: |
+          ARGS="--area ${{ steps.areas.outputs.list }}"
+          if [ "${{ github.event.inputs.skip_editorial }}" = "true" ]; then
+            ARGS="$ARGS --skip-editorial"
+          fi
+          node scripts/seed-raw-places.js $ARGS
 
       - name: Run comparison (Hudson Yards only)
         if: contains(steps.areas.outputs.list, 'hudson_yards')
