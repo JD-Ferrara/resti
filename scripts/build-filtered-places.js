@@ -96,14 +96,17 @@ editorial-quality guide that locals and visitors use to find great meals and dri
 • Well-known counter-service or QSR spots that are genuine NYC institutions
   (a famous taco counter, a legendary pizza slice spot, a renowned sandwich shop)
 
-━━━ GEOGRAPHY — DO NOT RE-FILTER ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• Every candidate in this batch has already been confirmed inside the guide's coverage
-  area by a polygon geofence check. DO NOT exclude based on "district" or
-  "neighborhood_area" text — those fields reflect NTA boundary matching, which can
-  label edge-of-boundary places as "Hell's Kitchen" or adjacent neighborhoods.
-  This does NOT mean the place is out of scope; the polygon geofence is authoritative.
-• Only exclude for location if the address is unambiguously outside Manhattan
-  (e.g., Brooklyn, Queens, New Jersey).
+━━━ GEOGRAPHY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Use "Custom District (geofence-verified)" as the authoritative geographic signal:
+  - Populated (e.g. "Hudson Yards", "Chelsea") → confirmed inside our polygon
+    geofence for that district. Do NOT exclude on geographic grounds.
+  - "NOT VERIFIED" → the place was not confirmed by the polygon check. Cross-reference
+    the address against the 19 covered neighborhoods. If it is clearly in an
+    uncovered area (Hell's Kitchen, Midtown, Upper East Side, outer boroughs, etc.),
+    exclude it with reason "outside coverage area". If the address is plausibly on
+    the border of a covered neighborhood, lean toward including it.
+• Ignore the "district" / "neighborhood_area" NTA labels entirely — they reflect
+  Google's boundary data which often differs from our custom polygon boundaries.
 
 ━━━ NEW OPENINGS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 • Low review counts (under 50) typically indicate a new opening, not poor quality.
@@ -342,7 +345,7 @@ async function classifyBatch(anthropic, batch, batchLabel) {
         `${idx + 1}. google_place_id: ${p.google_place_id}`,
         `   Name: ${p.name}`,
         `   Address: ${p.address ?? 'Unknown'}`,
-        `   District: ${p.district ?? p.neighborhood_area ?? 'Unknown'}`,
+        `   Custom District (geofence-verified): ${p.custom_district ?? 'NOT VERIFIED — may be outside coverage area'}`,
         `   Google Types: ${types}`,
         `   Price Level: ${p.price_range ?? `${p.price_level ?? 'Unknown'}`}`,
         `   Rating: ${p.google_rating ?? 'N/A'} (${p.google_review_count ?? 0} reviews)`,
