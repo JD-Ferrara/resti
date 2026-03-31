@@ -1,40 +1,98 @@
 name: "Step 1: Places Pipeline — Discover + Filter"
-# Fetches minimal place data (id, name, location, rating, review count, types)
-# for the selected area(s), applies local filters (geofence, rating, chain
-# exclusion), and upserts only qualifying rows to raw_places with status=pending.
+# Fetches place data for the selected area(s), applies local filters
+# (geofence, rating, chain exclusion), and upserts qualifying rows to
+# raw_places with status=pending.
 #
-# Run Step 2 (enrich-raw-places.yml) after reviewing the pending results to
-# populate the full atmosphere + contact fields via Place Details (New) API.
+# Check one or more area boxes below — any combination is valid.
+# Check "All areas" to run every district in one shot.
 
 on:
   workflow_dispatch:
     inputs:
-      area:
-        description: 'Area(s) to fetch — single key, comma-separated, or "all"'
-        required: true
-        default: 'hudson_yards'
-        type: choice
-        options:
-          - hudson_yards
-          - chelsea
-          - meatpacking
-          - west_village
-          - greenwich_village
-          - hudson_square
-          - soho
-          - noho
-          - tribeca
-          - financial_district
-          - little_italy
-          - chinatown
-          - nolita
-          - lower_east_side
-          - union_square
-          - gramercy
-          - flatiron
-          - nomad
-          - east_village
-          - all
+
+      # ── Select all ──────────────────────────────────────
+      all_areas:
+        description: '[ All areas ]'
+        type: boolean
+        default: false
+
+      # ── Individual areas ─────────────────────────────────
+      hudson_yards:
+        description: 'Hudson Yards'
+        type: boolean
+        default: false
+      chelsea:
+        description: 'Chelsea'
+        type: boolean
+        default: false
+      meatpacking:
+        description: 'Meatpacking District'
+        type: boolean
+        default: false
+      west_village:
+        description: 'West Village'
+        type: boolean
+        default: false
+      greenwich_village:
+        description: 'Greenwich Village'
+        type: boolean
+        default: false
+      hudson_square:
+        description: 'Hudson Square'
+        type: boolean
+        default: false
+      soho:
+        description: 'SoHo'
+        type: boolean
+        default: false
+      noho:
+        description: 'NoHo'
+        type: boolean
+        default: false
+      tribeca:
+        description: 'Tribeca'
+        type: boolean
+        default: false
+      financial_district:
+        description: 'Financial District'
+        type: boolean
+        default: false
+      little_italy:
+        description: 'Little Italy'
+        type: boolean
+        default: false
+      chinatown:
+        description: 'Chinatown'
+        type: boolean
+        default: false
+      nolita:
+        description: 'NoLita'
+        type: boolean
+        default: false
+      lower_east_side:
+        description: 'Lower East Side'
+        type: boolean
+        default: false
+      union_square:
+        description: 'Union Square'
+        type: boolean
+        default: false
+      gramercy:
+        description: 'Gramercy'
+        type: boolean
+        default: false
+      flatiron:
+        description: 'Flatiron'
+        type: boolean
+        default: false
+      nomad:
+        description: 'NoMad'
+        type: boolean
+        default: false
+      east_village:
+        description: 'East Village'
+        type: boolean
+        default: false
 
 jobs:
   run-pipeline:
@@ -66,15 +124,54 @@ jobs:
           echo "GOOGLE_PLACES_API_KEY=$GOOGLE_PLACES_API_KEY" >> .env
           echo "SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY" >> .env
 
+      - name: Resolve selected areas
+        id: areas
+        run: |
+          if [ "${{ github.event.inputs.all_areas }}" = "true" ]; then
+            echo "list=all" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          AREAS=""
+          [ "${{ github.event.inputs.hudson_yards }}"       = "true" ] && AREAS="$AREAS,hudson_yards"
+          [ "${{ github.event.inputs.chelsea }}"            = "true" ] && AREAS="$AREAS,chelsea"
+          [ "${{ github.event.inputs.meatpacking }}"        = "true" ] && AREAS="$AREAS,meatpacking"
+          [ "${{ github.event.inputs.west_village }}"       = "true" ] && AREAS="$AREAS,west_village"
+          [ "${{ github.event.inputs.greenwich_village }}"  = "true" ] && AREAS="$AREAS,greenwich_village"
+          [ "${{ github.event.inputs.hudson_square }}"      = "true" ] && AREAS="$AREAS,hudson_square"
+          [ "${{ github.event.inputs.soho }}"               = "true" ] && AREAS="$AREAS,soho"
+          [ "${{ github.event.inputs.noho }}"               = "true" ] && AREAS="$AREAS,noho"
+          [ "${{ github.event.inputs.tribeca }}"            = "true" ] && AREAS="$AREAS,tribeca"
+          [ "${{ github.event.inputs.financial_district }}" = "true" ] && AREAS="$AREAS,financial_district"
+          [ "${{ github.event.inputs.little_italy }}"       = "true" ] && AREAS="$AREAS,little_italy"
+          [ "${{ github.event.inputs.chinatown }}"          = "true" ] && AREAS="$AREAS,chinatown"
+          [ "${{ github.event.inputs.nolita }}"             = "true" ] && AREAS="$AREAS,nolita"
+          [ "${{ github.event.inputs.lower_east_side }}"    = "true" ] && AREAS="$AREAS,lower_east_side"
+          [ "${{ github.event.inputs.union_square }}"       = "true" ] && AREAS="$AREAS,union_square"
+          [ "${{ github.event.inputs.gramercy }}"           = "true" ] && AREAS="$AREAS,gramercy"
+          [ "${{ github.event.inputs.flatiron }}"           = "true" ] && AREAS="$AREAS,flatiron"
+          [ "${{ github.event.inputs.nomad }}"              = "true" ] && AREAS="$AREAS,nomad"
+          [ "${{ github.event.inputs.east_village }}"       = "true" ] && AREAS="$AREAS,east_village"
+
+          # Strip leading comma
+          AREAS="${AREAS#,}"
+
+          if [ -z "$AREAS" ]; then
+            echo "❌ No areas selected — check at least one box before running." >&2
+            exit 1
+          fi
+
+          echo "list=$AREAS" >> $GITHUB_OUTPUT
+
       - name: "Step 1 — Discover + filter (seed-raw-places.js)"
-        run: node scripts/seed-raw-places.js --area ${{ github.event.inputs.area }}
+        run: node scripts/seed-raw-places.js --area ${{ steps.areas.outputs.list }}
 
       - name: Run comparison (Hudson Yards only)
-        if: github.event.inputs.area == 'hudson_yards'
+        if: contains(steps.areas.outputs.list, 'hudson_yards')
         run: node scripts/compare-hudson-yards.js --save
 
       - name: Upload comparison report
-        if: github.event.inputs.area == 'hudson_yards'
+        if: contains(steps.areas.outputs.list, 'hudson_yards')
         uses: actions/upload-artifact@v4
         with:
           name: hudson-yards-compare-${{ github.run_number }}
