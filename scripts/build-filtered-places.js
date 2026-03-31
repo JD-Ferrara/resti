@@ -60,52 +60,79 @@ const CLASSIFICATION_TOOL = {
 
 // ── Claude system prompt ───────────────────────────────────
 const CLASSIFICATION_SYSTEM_PROMPT = `\
-You are a restaurant curation expert for a premium NYC neighborhood dining guide covering
-19 Manhattan neighborhoods: Hudson Yards, Chelsea, Meatpacking District, West Village,
+You are a restaurant and bar curation expert for a premium NYC neighborhood dining guide
+covering 19 Manhattan neighborhoods: Hudson Yards, Chelsea, Meatpacking District, West Village,
 Greenwich Village, Hudson Square, SoHo, NoHo, Tribeca, Financial District, Little Italy,
 Chinatown, NoLita, Lower East Side, Union Square, Gramercy, Flatiron, NoMad, and East Village.
 
-Your task is to evaluate candidate restaurants and decide whether each one belongs in a
-curated, editorial-quality dining guide that locals and visitors use to find great meals.
+Your task is to evaluate candidate venues and decide whether each one belongs in a curated,
+editorial-quality guide that locals and visitors use to find great meals and drinks.
 
 ━━━ EXCLUDE these types ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 • Fast food chains (McDonald's, Subway, Burger King, Taco Bell, KFC, Popeyes, etc.)
-• Quick service / counter-service restaurants (QSR) with no table service
 • Major national or international chains that are not destination-worthy
   (Applebee's, Chili's, Olive Garden, IHOP, Denny's, TGI Friday's, Outback, etc.)
-• Generic coffee shops and bakeries (Starbucks, Dunkin', Tim Hortons, Pret a Manger,
+• Generic coffee shop and bakery chains (Starbucks, Dunkin', Tim Hortons, Pret a Manger,
   Le Pain Quotidien, generic café chains)
-• Convenience stores, bodegas, delis, and food kiosks
-• Grocery stores, supermarkets, or food halls that are just grocery shopping
-• Hotel restaurants that are generic lobby cafes (not destination restaurants)
+• Convenience stores, bodegas, delis without a distinct identity, and food kiosks
+• Grocery stores and supermarkets
+• Hotel venues that are clearly generic lobby cafes with no culinary identity
 • Vending machines, catering companies, private dining clubs (not open to public)
-• Franchise chains in snacks/dessert (Auntie Anne's, Cinnabon, Jamba Juice, etc.)
+• Franchise snack/dessert chains (Auntie Anne's, Cinnabon, Jamba Juice, etc.)
 • Sports bar chains (Dave & Buster's, Buffalo Wild Wings, Twin Peaks, Yard House, etc.)
-• Places that are clearly outside the intended neighborhood or district
 
 ━━━ INCLUDE these types ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 • Full-service, sit-down restaurants of any cuisine
 • Chef-driven or concept-driven dining destinations
-• Notable bars and cocktail lounges with a meaningful food menu
+• Destination cocktail bars, speakeasies, and hotel bars with a distinct identity
+  — a bar does NOT need a food program to qualify; drinks-only is fine
+• Notable neighborhood bars: wine bars, natural wine bars, craft cocktail lounges,
+  sake bars, mezcal bars, champagne bars, etc.
 • Destination casual dining, brunch spots, and lunch counters worth a visit
 • Unique food concepts with a clear identity and local following
-• Wine bars, sake bars, or specialty beverage spots with food
 • Well-regarded ethnic restaurants with quality ingredients and a loyal following
-• Notable food halls or market concepts (e.g., José Andrés concepts, Eataly)
-• Hotel restaurants that are genuine dining destinations (not generic lobby cafes)
+• Notable food halls or market-restaurant concepts (e.g., Eataly, José Andrés concepts)
+• Hotel restaurants and bars that are genuine dining or drinking destinations
+• Well-known counter-service or QSR spots that are genuine NYC institutions
+  (a famous taco counter, a legendary pizza slice spot, a renowned sandwich shop)
+
+━━━ GEOGRAPHY — DO NOT RE-FILTER ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Every candidate in this batch has already been confirmed inside the guide's coverage
+  area by a polygon geofence check. DO NOT exclude based on "district" or
+  "neighborhood_area" text — those fields reflect NTA boundary matching, which can
+  label edge-of-boundary places as "Hell's Kitchen" or adjacent neighborhoods.
+  This does NOT mean the place is out of scope; the polygon geofence is authoritative.
+• Only exclude for location if the address is unambiguously outside Manhattan
+  (e.g., Brooklyn, Queens, New Jersey).
+
+━━━ NEW OPENINGS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Low review counts (under 50) typically indicate a new opening, not poor quality.
+• A place rated 4.3+ with 10–40 reviews that has a clear, distinct identity should be
+  treated as a promising new venue — not excluded for lack of data.
+• No editorial summary is expected for new places; do not penalize its absence.
 
 ━━━ DECISION GUIDANCE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 • Use name, Google place types, price level, rating, and editorial summary together.
 • Google Types + price level are your primary signals:
-  - types ["restaurant"] or ["bar"] with price level $$–$$$$ → almost always INCLUDE,
-    even if editorial summary is "None"
-  - types ["fast_food_restaurant"] or ["meal_takeaway"] with price level $ → almost always EXCLUDE
-• Editorial Summary is a helpful confirming signal when present, NOT a requirement:
-  - "None" means the summary wasn't available at discovery time, not that the place is low quality
-  - Do not penalize a candidate solely because its editorial summary is "None"
-  - When summary is present, use it to distinguish destination-quality from generic
+  - types ["restaurant"] or ["bar"] + price $$–$$$$ → almost always INCLUDE
+  - types ["bar"] or ["night_club"] + high rating, no price level → likely INCLUDE as a
+    destination bar; only exclude if name/types clearly signal a generic chain or dive bar
+  - types ["fast_food_restaurant"] or ["meal_takeaway"] + price $ → almost always EXCLUDE
+    unless the name strongly suggests a well-known NYC institution
+• Editorial summary is a helpful confirming signal when present, NOT a requirement.
+  "None" means it wasn't available at discovery time — not that the place is low quality.
 • When in genuine doubt about a borderline case, lean toward EXCLUDING.
 • Return a classification for EVERY candidate in the batch, in the same order provided.`;
+
+// ── Allowlist ─────────────────────────────────────────────
+async function fetchAllowlist(supabase) {
+  const { data, error } = await supabase
+    .from('place_allowlist')
+    .select('name, notes')
+    .eq('is_active', true);
+  if (error) throw new Error(`Failed to fetch place_allowlist: ${error.message}`);
+  return data ?? [];
+}
 
 // ── Supabase client ───────────────────────────────────────
 function getSupabase() {
@@ -278,7 +305,10 @@ async function getCandidates(supabase, areaFilter) {
     .eq('status', 'pending');
 
   if (areaFilter) {
-    query = query.eq('search_area', areaFilter);
+    const areas = areaFilter.split(',').map(a => a.trim()).filter(Boolean);
+    query = areas.length === 1
+      ? query.eq('search_area', areas[0])
+      : query.in('search_area', areas);
   }
 
   const { data: pending, error: pErr } = await query;
@@ -441,6 +471,7 @@ async function insertApprovedCandidates(supabase, candidates, classifications, d
         reservation:        null,   // not available from raw_places
         google_types:       raw.google_types,
         editorial_summary:  raw.editorial_summary,
+        parent_concept:     null,   // filled in editorially for sister/affiliated venues
         source_status:      'ai_candidate',
       };
     })
@@ -528,8 +559,30 @@ async function run() {
     return;
   }
 
+  // ── Step 3b: Split out allowlisted candidates ────────
+  // Places on place_allowlist are auto-approved without going through Claude.
+  const allowlist = await fetchAllowlist(supabase);
+  const allowlistByName = new Map(allowlist.map(e => [e.name, e]));
+
+  const allowlisted = candidates.filter(c => allowlistByName.has(c.name));
+  const toClassify  = candidates.filter(c => !allowlistByName.has(c.name));
+
+  const allowlistClassifications = allowlisted.map(c => ({
+    google_place_id: c.google_place_id,
+    relevant: true,
+    reason: `On place allowlist — auto-approved. ${allowlistByName.get(c.name)?.notes ?? ''}`.trim(),
+  }));
+
+  if (allowlisted.length > 0) {
+    console.log(`  Allowlist auto-approved: ${allowlisted.length} (${allowlisted.map(c => c.name).join(', ')})\n`);
+  }
+
   // ── Step 4: AI classification ─────────────────────────
-  const classifications = await classifyCandidates(anthropic, candidates);
+  const aiClassifications = toClassify.length > 0
+    ? await classifyCandidates(anthropic, toClassify)
+    : [];
+
+  const classifications = [...allowlistClassifications, ...aiClassifications];
 
   // ── Step 5: Insert approved ───────────────────────────
   const newCount = await insertApprovedCandidates(supabase, candidates, classifications, dryRun);
