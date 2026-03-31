@@ -20,22 +20,21 @@ CREATE TABLE IF NOT EXISTS raw_places (
   price_level             INTEGER,        -- 1–4 from Google (PRICE_LEVEL_INEXPENSIVE … EXPENSIVE)
   price_range             TEXT,           -- derived label: "$" | "$$" | "$$$" | "$$$$"
 
-  -- Contact & hours
-  phone                   TEXT,
+  -- Contact & links
+  phone                   TEXT,           -- nationalPhoneNumber: (212) 555-1234
   website                 TEXT,
-  hours                   JSONB,          -- regularOpeningHours object from Google
+  google_maps_uri         TEXT,           -- direct maps.google.com link; Basic tier
 
-  -- Service & amenity booleans (from Google Places New API)
+  -- Hours
+  hours                   JSONB,          -- regularOpeningHours: { periods, weekdayDescriptions }
+
+  -- Business status
   business_status         TEXT,           -- OPERATIONAL | CLOSED_TEMPORARILY | CLOSED_PERMANENTLY
-  has_outdoor_seating     BOOLEAN,
-  takes_reservations      BOOLEAN,
-  serves_beer             BOOLEAN,
-  serves_wine             BOOLEAN,
-  serves_breakfast        BOOLEAN,
-  serves_lunch            BOOLEAN,
-  serves_dinner           BOOLEAN,
-  has_takeout             BOOLEAN,
-  has_delivery            BOOLEAN,
+
+  -- Note: Preferred (Atmosphere) tier amenity booleans (outdoorSeating, reservable,
+  -- servesBeer, servesWine, servesDinner, takeout, delivery, etc.) are intentionally
+  -- excluded. Adding any Preferred field to discovery bumps all 500+ requests to
+  -- the highest billing tier. Fetch via Place Details after filtering if needed.
 
   -- Google category types (e.g. ["restaurant","bar","food"])
   google_types            TEXT[],

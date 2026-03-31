@@ -279,24 +279,28 @@ export const DESTINATION_QSR = new Set([
 //
 // See: https://developers.google.com/maps/documentation/places/web-service/place-data-fields
 export const PLACES_DISCOVERY_FIELD_MASK = [
+  // ── Basic tier ────────────────────────────────────────────
   'places.id',
   'places.displayName',
   'places.formattedAddress',
   'places.location',
+  'places.types',
+  'places.businessStatus',
+  'places.googleMapsUri',       // direct Maps link; Basic tier, free
+
+  // ── Advanced tier ─────────────────────────────────────────
+  // rating/priceLevel already bill at Advanced, so these come at no extra cost.
   'places.rating',
   'places.userRatingCount',
   'places.priceLevel',
-  'places.types',
-  'places.businessStatus',
-  // websiteUri is an Advanced (Contact) tier field, but since rating/userRatingCount
-  // already bill the request at Advanced rate, adding websiteUri costs nothing extra.
-  // Storing it in raw_places.website now means the future pipeline
-  // (raw_places → filtered_places → restaurants) carries the correct website
-  // from Google's authoritative source, avoiding stale manual entries.
   'places.websiteUri',
-  // editorialSummary intentionally excluded — it is Preferred tier and would
-  // bill all discovery requests at the Atmosphere rate. Fetched separately
-  // via Place Details (PLACES_DETAILS_EDITORIAL_FIELD_MASK) after filtering.
+  'places.nationalPhoneNumber', // (212) 555-1234 format; Advanced tier
+  'places.regularOpeningHours', // full weekly schedule JSONB; Advanced tier
+
+  // ── Excluded: Preferred (Atmosphere) tier ─────────────────
+  // Adding any Preferred field bumps ALL discovery requests to the highest billing
+  // tier. editorialSummary, servesBeer, outdoorSeating, reservable, etc. are all
+  // Preferred. Fetch them via Place Details after filtering instead.
 ].join(',');
 
 // Field mask for the Place Details (New) editorial enrichment step.
