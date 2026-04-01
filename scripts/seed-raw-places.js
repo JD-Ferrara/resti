@@ -23,7 +23,7 @@ import { point } from '@turf/helpers';
 import { fetchAllPlaces } from './fetch-places.js';
 import { filterPlaces, getDisplayName, normalizePriceLevel } from './filter-places.js';
 import { enrichWithNeighborhood, getCustomDistrictsGeoJSON } from './detect-neighborhood.js';
-import { SEARCH_AREAS, PLACES_DETAILS_EDITORIAL_FIELD_MASK } from './places-config.js';
+import { SEARCH_AREAS, PLACES_DETAILS_ENRICHMENT_FIELD_MASK } from './places-config.js';
 
 // ── Supabase client (service role for writes) ─────────────
 
@@ -172,46 +172,53 @@ function clipToBounds(enriched, areaConfig) {
 
 const PLACE_DETAILS_BASE_URL = 'https://places.googleapis.com/v1/places';
 
-async function fetchEditorialSummary(apiKey, placeId) {
+// Fetches editorialSummary + regularOpeningHours for a single place.
+// Both are Enterprise tier — fetching them together in one call costs the same
+// as fetching editorialSummary alone (billing is per request, not per field).
+async function fetchPlaceEnrichment(apiKey, placeId) {
   const res = await fetch(`${PLACE_DETAILS_BASE_URL}/${placeId}`, {
     headers: {
       'X-Goog-Api-Key': apiKey,
-      'X-Goog-FieldMask': PLACES_DETAILS_EDITORIAL_FIELD_MASK,
+      'X-Goog-FieldMask': PLACES_DETAILS_ENRICHMENT_FIELD_MASK,
     },
   });
 
   if (!res.ok) {
     const err = await res.text();
     console.warn(`  ⚠️  Place Details error for ${placeId} (${res.status}): ${err.slice(0, 120)}`);
-    return null;
+    return { editorial: null, hours: null };
   }
 
   const data = await res.json();
-  return data.editorialSummary?.text ?? null;
+  return {
+    editorial: data.editorialSummary?.text ?? null,
+    hours:     data.regularOpeningHours ?? null,
+  };
 }
 
-async function enrichEditorialSummaries(places, apiKey) {
+async function enrichPlaceDetails(places, apiKey) {
   if (places.length === 0) return new Map();
 
-  console.log(`\n[3c/4] Fetching editorial summaries for ${places.length} filtered places...`);
-  const summaries = new Map();
+  console.log(`\n[3c/4] Fetching Place Details (editorial + hours) for ${places.length} filtered places...`);
+  const enrichment = new Map();
 
   for (let i = 0; i < places.length; i++) {
     const place = places[i];
-    // Small delay to avoid rate limits — 50ms keeps throughput at ~20 req/s
+    // 50ms delay → ~20 req/s, well within rate limits
     if (i > 0) await new Promise((r) => setTimeout(r, 50));
 
-    const text = await fetchEditorialSummary(apiKey, place.id);
-    summaries.set(place.id, text);
+    const data = await fetchPlaceEnrichment(apiKey, place.id);
+    enrichment.set(place.id, data);
 
     if ((i + 1) % 25 === 0 || i + 1 === places.length) {
-      console.log(`  [${i + 1}/${places.length}] editorial summaries fetched`);
+      console.log(`  [${i + 1}/${places.length}] enriched`);
     }
   }
 
-  const withSummary = [...summaries.values()].filter(Boolean).length;
-  console.log(`  ✅ ${withSummary}/${places.length} places have an editorial summary`);
-  return summaries;
+  const withEditorial = [...enrichment.values()].filter(e => e.editorial).length;
+  const withHours     = [...enrichment.values()].filter(e => e.hours).length;
+  console.log(`  ✅ ${withEditorial}/${places.length} have editorial summary, ${withHours}/${places.length} have hours`);
+  return enrichment;
 }
 
 // ── Shape a Place into a raw_places row ───────────────────
@@ -284,20 +291,27 @@ async function runArea(areaKey, supabase, { skipEditorial = false } = {}) {
   //     Only called for places that survived quality + polygon filtering (~100–150),
   //     not the full discovery set (~500–600), keeping Preferred-tier call volume low.
   //     Skip with --skip-editorial for fast/cheap pipeline runs.
+  // 3c. Place Details enrichment (Enterprise tier) — fetches editorialSummary
+  //     AND regularOpeningHours in a single call per surviving place.
+  //     Both fields are Enterprise tier; fetching together costs the same per
+  //     request as fetching either one alone. Only ~100-150 calls per area.
+  //     Use --skip-editorial to skip this step entirely (hours will be null).
   let clippedWithEditorial;
   if (skipEditorial) {
-    console.log('\n[3c/4] Editorial summary enrichment SKIPPED (--skip-editorial)');
+    console.log('\n[3c/4] Place Details enrichment SKIPPED (--skip-editorial) — editorial_summary and hours will be null');
     clippedWithEditorial = clipped;
   } else {
     const apiKey = process.env.GOOGLE_PLACES_API_KEY;
-    if (!apiKey) throw new Error('Missing GOOGLE_PLACES_API_KEY in .env (required for editorial summary enrichment). Use --skip-editorial to bypass.');
-    const editorialMap = await enrichEditorialSummaries(clipped, apiKey);
-    clippedWithEditorial = clipped.map((place) => ({
-      ...place,
-      editorialSummary: editorialMap.get(place.id)
-        ? { text: editorialMap.get(place.id) }
-        : undefined,
-    }));
+    if (!apiKey) throw new Error('Missing GOOGLE_PLACES_API_KEY in .env (required for Place Details enrichment). Use --skip-editorial to bypass.');
+    const enrichmentMap = await enrichPlaceDetails(clipped, apiKey);
+    clippedWithEditorial = clipped.map((place) => {
+      const enriched = enrichmentMap.get(place.id);
+      return {
+        ...place,
+        editorialSummary:    enriched?.editorial ? { text: enriched.editorial } : undefined,
+        regularOpeningHours: enriched?.hours ?? undefined,
+      };
+    });
   }
 
   // 4. Upsert pending rows + purge excluded rows from the table.
