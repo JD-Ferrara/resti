@@ -320,33 +320,41 @@ export const PLACES_DETAILS_ENRICHMENT_FIELD_MASK = [
 // matches BOTH an included type AND an excluded type, filtering
 // non-food venues before they ever count against our result quota.
 //
-// Conservative list: only types that are unambiguously non-food.
-// Intentionally NOT included: lodging (hotel bars), night_club (speakeasies),
-// shopping_mall (Eataly), casino — these legitimately contain destination venues.
+// IMPORTANT: Only use types confirmed valid in Places API (New) Table A.
+// An invalid type causes a 400 error that rejects the entire request.
+// Types removed as invalid: dry_cleaning, laundry, fitness_center,
+//   sports_club, drugstore, hair_care (not in New API type table).
 //
-// Mirrored in place_exclusion_rules (rule_type = 'google_type_exclude')
-// for auditability. Run supabase-exclusion-rules-google-types.sql to sync.
+// Intentionally NOT included: lodging (hotel bars), night_club (speakeasies),
+// shopping_mall (Eataly), casino — these contain legitimate destination venues.
+//
+// Mirrored in place_exclusion_rules (rule_type = 'google_type_exclude').
 export const EXCLUDED_GOOGLE_TYPES = [
+  // Fuel / automotive
   'gas_station',
+  'car_wash',
+  'car_dealer',
+
+  // Food retail (not dining)
   'grocery_store',
   'supermarket',
   'convenience_store',
+
+  // Health / personal care
   'pharmacy',
-  'drugstore',
-  'gym',
-  'fitness_center',
-  'sports_club',
   'beauty_salon',
-  'hair_care',
   'spa',
+
+  // Finance
   'bank',
   'atm',
-  'car_wash',
-  'car_dealer',
-  'laundry',
-  'dry_cleaning',
-  'movie_theater',     // concession-only venues; real dine-in theaters are kept via allow-listing
-  'bowling_alley',     // snack bar in a bowling alley ≠ destination dining
+
+  // Fitness
+  'gym',
+
+  // Entertainment (concession-only)
+  'movie_theater',
+  'bowling_alley',
   'amusement_park',
 ];
 
