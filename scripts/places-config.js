@@ -314,6 +314,42 @@ export const PLACES_DETAILS_ENRICHMENT_FIELD_MASK = [
   'regularOpeningHours',
 ].join(',');
 
+// ── API-level Google type exclusions ─────────────────────
+// Passed as `excludedTypes` in Nearby Search requests alongside
+// `includedTypes: ['restaurant', 'bar']`. Google drops any place that
+// matches BOTH an included type AND an excluded type, filtering
+// non-food venues before they ever count against our result quota.
+//
+// Conservative list: only types that are unambiguously non-food.
+// Intentionally NOT included: lodging (hotel bars), night_club (speakeasies),
+// shopping_mall (Eataly), casino — these legitimately contain destination venues.
+//
+// Mirrored in place_exclusion_rules (rule_type = 'google_type_exclude')
+// for auditability. Run supabase-exclusion-rules-google-types.sql to sync.
+export const EXCLUDED_GOOGLE_TYPES = [
+  'gas_station',
+  'grocery_store',
+  'supermarket',
+  'convenience_store',
+  'pharmacy',
+  'drugstore',
+  'gym',
+  'fitness_center',
+  'sports_club',
+  'beauty_salon',
+  'hair_care',
+  'spa',
+  'bank',
+  'atm',
+  'car_wash',
+  'car_dealer',
+  'laundry',
+  'dry_cleaning',
+  'movie_theater',     // concession-only venues; real dine-in theaters are kept via allow-listing
+  'bowling_alley',     // snack bar in a bowling alley ≠ destination dining
+  'amusement_park',
+];
+
 // ── NYC GeoJSON ──────────────────────────────────────────
 // NYC Open Data — Neighborhood Tabulation Areas (NTA) boundaries
 // Used by detect-neighborhood.js for turf.js point-in-polygon checks.

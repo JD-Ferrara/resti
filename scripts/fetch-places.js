@@ -17,7 +17,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import booleanPointInPolygon from '@turf/boolean-point-in-polygon';
 import { point } from '@turf/helpers';
-import { SEARCH_AREAS, PLACES_DISCOVERY_FIELD_MASK } from './places-config.js';
+import { SEARCH_AREAS, PLACES_DISCOVERY_FIELD_MASK, EXCLUDED_GOOGLE_TYPES } from './places-config.js';
 import { getCustomDistrictsGeoJSON } from './detect-neighborhood.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -58,7 +58,8 @@ const SEPARATE_TYPE_QUERIES = [['restaurant'], ['bar']]; // for large-radius are
 
 async function fetchPage(apiKey, point, types, pageToken = null) {
   const body = {
-    includedTypes: types,
+    includedTypes:  types,
+    excludedTypes:  EXCLUDED_GOOGLE_TYPES,
     maxResultCount: MAX_RESULTS_PER_PAGE,
     locationRestriction: {
       circle: {
