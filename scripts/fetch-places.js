@@ -15,7 +15,10 @@ import 'dotenv/config';
 import { writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import booleanPointInPolygon from '@turf/boolean-point-in-polygon';
+import { point } from '@turf/helpers';
 import { SEARCH_AREAS, PLACES_DISCOVERY_FIELD_MASK } from './places-config.js';
+import { getCustomDistrictsGeoJSON } from './detect-neighborhood.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUTPUT_DIR = join(__dirname, 'output');
@@ -39,14 +42,19 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// ── Core fetch ────────────────────────────────────────────
-
-// Run two separate queries per circle — one for 'restaurant', one for 'bar'.
-// A combined query would let bars and restaurants compete for the same 60-result
-// quota, crowding out destination dining spots tagged as 'bar' (P.J. Clarke's,
-// Bronx Brewery Kitchen, La Barra, Greywind/Spygold, etc.).
-// Separate queries give each type its own 60-result budget.
-const PLACE_TYPE_QUERIES = [['restaurant'], ['bar']];
+// ── Type query strategy ───────────────────────────────────
+//
+// Fine-grid areas (gridStepMeters set, ~150m circles):
+//   Each tiny circle returns ~5 results regardless of type — the 60-result cap
+//   is never hit. Combining ['restaurant', 'bar'] into one query halves API calls
+//   with no coverage loss.
+//
+// Large-radius areas (manual searchPoints, 450–700m circles):
+//   A combined query lets all types compete for the same 60-result budget,
+//   which can crowd out bars when the area has many restaurants. Two separate
+//   queries give each type its own budget.
+const COMBINED_TYPE_QUERY  = [['restaurant', 'bar']];  // for fine-grid areas
+const SEPARATE_TYPE_QUERIES = [['restaurant'], ['bar']]; // for large-radius areas
 
 async function fetchPage(apiKey, point, types, pageToken = null) {
   const body = {
@@ -88,10 +96,10 @@ async function fetchPage(apiKey, point, types, pageToken = null) {
 
 // ── Per-point fetch ───────────────────────────────────────
 
-async function fetchAllForPoint(apiKey, point, pointLabel) {
+async function fetchAllForPoint(apiKey, point, pointLabel, typeQueries) {
   const pointPlaces = [];
 
-  for (const types of PLACE_TYPE_QUERIES) {
+  for (const types of typeQueries) {
     const typeLabel = types.join('+');
     let pageToken = null;
     let page = 1;
@@ -244,24 +252,57 @@ export async function fetchAllPlaces(areaKey) {
     throw new Error(`Unknown area "${areaKey}". Valid areas: ${valid}`);
   }
 
-  const searchPoints = areaConfig.gridStepMeters
-    ? generateGrid(areaConfig.bounds, areaConfig.gridStepMeters)
-    : areaConfig.searchPoints;
+  // ── Search points ──────────────────────────────────────────
+  let searchPoints;
+  let isGridMode = false;
 
-  const gridNote = areaConfig.gridStepMeters
-    ? `fine grid — ${searchPoints.length} cells × ${areaConfig.gridStepMeters}m`
-    : `${searchPoints.length} point${searchPoints.length > 1 ? 's' : ''}`;
-  console.error(`\n📍 Fetching restaurants in ${areaConfig.name} (${gridNote})\n`);
+  if (areaConfig.gridStepMeters) {
+    isGridMode = true;
+    const rawGrid = generateGrid(areaConfig.bounds, areaConfig.gridStepMeters);
+
+    // Clip grid to the custom district polygon — drops circles whose center
+    // falls outside the actual geofence (e.g. over the Hudson River or adjacent
+    // blocks), reducing wasted API calls.
+    const customGeojson = getCustomDistrictsGeoJSON();
+    const polyFeature = customGeojson?.features?.find(
+      (f) => f.properties.Name === areaConfig.districtName
+    );
+
+    if (polyFeature) {
+      searchPoints = rawGrid.filter((p) => {
+        try { return booleanPointInPolygon(point([p.lng, p.lat]), polyFeature); }
+        catch { return true; } // include on error to avoid false drops
+      });
+      const dropped = rawGrid.length - searchPoints.length;
+      console.error(`  Grid clipped: ${rawGrid.length} → ${searchPoints.length} cells inside polygon (${dropped} outside dropped)`);
+    } else {
+      searchPoints = rawGrid;
+      console.error(`  ⚠️  No polygon found for "${areaConfig.districtName}" — using full bounding box grid`);
+    }
+  } else {
+    searchPoints = areaConfig.searchPoints;
+  }
+
+  // ── Type query strategy ────────────────────────────────────
+  // Fine-grid (150m circles): combined types to halve API calls — no competition
+  // for the 60-result cap since each circle returns ~5 results anyway.
+  // Large-radius (manual points): separate queries preserve per-type budget.
+  const typeQueries = isGridMode ? COMBINED_TYPE_QUERY : SEPARATE_TYPE_QUERIES;
+
+  const gridNote = isGridMode
+    ? `fine grid — ${searchPoints.length} cells × ${areaConfig.gridStepMeters}m, ${typeQueries.length === 1 ? 'combined types' : 'separate types'}`
+    : `${searchPoints.length} point${searchPoints.length > 1 ? 's' : ''}, separate types`;
+  console.error(`\n📍 Fetching in ${areaConfig.name} (${gridNote})\n`);
 
   const seen = new Set();
   const allPlaces = [];
 
   for (let i = 0; i < searchPoints.length; i++) {
-    const point = searchPoints[i];
-    const label = searchPoints.length > 1 ? `point ${i + 1}/${searchPoints.length} — ${point.lat},${point.lng} r=${point.radius}m` : `${point.lat},${point.lng} r=${point.radius}m`;
+    const searchPoint = searchPoints[i];
+    const label = searchPoints.length > 1 ? `point ${i + 1}/${searchPoints.length} — ${searchPoint.lat},${searchPoint.lng} r=${searchPoint.radius}m` : `${searchPoint.lat},${searchPoint.lng} r=${searchPoint.radius}m`;
     console.error(`   → ${label}`);
 
-    const places = await fetchAllForPoint(apiKey, point, `${i + 1}`);
+    const places = await fetchAllForPoint(apiKey, searchPoint, `${i + 1}`, typeQueries);
 
     let newCount = 0;
     for (const place of places) {

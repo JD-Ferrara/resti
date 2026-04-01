@@ -267,46 +267,52 @@ export const DESTINATION_QSR = new Set([
 // Requesting higher-tier fields on every search request is the main cost driver.
 //
 // BILLING TIERS for Nearby Search (New) / Text Search (New):
-//   Basic:     id, displayName, formattedAddress, location, types, businessStatus
-//   Advanced:  rating, userRatingCount, priceLevel  (+$$ vs Basic)
-//   Preferred: editorialSummary, reviews, servesBeer, outdoorSeating, etc. (+$$$ vs Advanced)
+//   Basic:      id, displayName, formattedAddress, location, types, businessStatus,
+//               googleMapsUri                                           ($0.032/req)
+//   Advanced:   + rating, userRatingCount, priceLevel, websiteUri,
+//               nationalPhoneNumber                                     ($0.035/req)
+//   Enterprise: + regularOpeningHours, editorialSummary, reviews,
+//               servesBeer, outdoorSeating, reservable, etc.            ($0.040/req)
 //
-// A single Preferred field bills the ENTIRE request at the Preferred (Atmosphere) rate.
-// editorialSummary is Preferred — including it here would bill all 572+ discovery
-// requests at the highest tier. Instead it is fetched in a targeted Place Details
-// enrichment step (seed-raw-places.js) for quality-filtered candidates only,
-// reducing Preferred-tier calls from ~572 to ~100-150 per area.
+// A single Enterprise field bills the ENTIRE request at Enterprise rate.
+// Both editorialSummary AND regularOpeningHours are Enterprise — including either
+// here would bill all 150–300+ discovery requests at the highest tier.
+// Instead, both are fetched in a single targeted Place Details enrichment call
+// (see PLACES_DETAILS_ENRICHMENT_FIELD_MASK) for quality-filtered survivors only.
 //
 // See: https://developers.google.com/maps/documentation/places/web-service/place-data-fields
 export const PLACES_DISCOVERY_FIELD_MASK = [
-  // ── Basic tier ────────────────────────────────────────────
+  // ── Basic tier ($0.032/req) ───────────────────────────────
   'places.id',
   'places.displayName',
   'places.formattedAddress',
   'places.location',
   'places.types',
   'places.businessStatus',
-  'places.googleMapsUri',       // direct Maps link; Basic tier, free
+  'places.googleMapsUri',
 
-  // ── Advanced tier ─────────────────────────────────────────
-  // rating/priceLevel already bill at Advanced, so these come at no extra cost.
+  // ── Advanced tier ($0.035/req — rating already pushes here) ─
   'places.rating',
   'places.userRatingCount',
   'places.priceLevel',
   'places.websiteUri',
-  'places.nationalPhoneNumber', // (212) 555-1234 format; Advanced tier
-  'places.regularOpeningHours', // full weekly schedule JSONB; Advanced tier
+  'places.nationalPhoneNumber',
 
-  // ── Excluded: Preferred (Atmosphere) tier ─────────────────
-  // Adding any Preferred field bumps ALL discovery requests to the highest billing
-  // tier. editorialSummary, servesBeer, outdoorSeating, reservable, etc. are all
-  // Preferred. Fetch them via Place Details after filtering instead.
+  // ── Enterprise fields intentionally excluded ──────────────
+  // regularOpeningHours and editorialSummary are Enterprise tier ($0.040/req).
+  // Both are fetched via PLACES_DETAILS_ENRICHMENT_FIELD_MASK for survivors only
+  // (~100–150 places), keeping the bulk of discovery at Advanced rate.
 ].join(',');
 
-// Field mask for the Place Details (New) editorial enrichment step.
-// editorialSummary is Preferred (Atmosphere) tier, so this is only called
-// for quality-filtered candidates — not every discovered place.
-export const PLACES_DETAILS_EDITORIAL_FIELD_MASK = 'editorialSummary';
+// Field mask for the Place Details (New) enrichment step.
+// Called after quality + polygon filtering for surviving candidates only.
+// editorialSummary + regularOpeningHours are both Enterprise tier, but since
+// we're already paying Enterprise for editorialSummary, adding regularOpeningHours
+// to the same request costs nothing extra per call.
+export const PLACES_DETAILS_ENRICHMENT_FIELD_MASK = [
+  'editorialSummary',
+  'regularOpeningHours',
+].join(',');
 
 // ── NYC GeoJSON ──────────────────────────────────────────
 // NYC Open Data — Neighborhood Tabulation Areas (NTA) boundaries
