@@ -438,6 +438,22 @@ async function run() {
   const rules = await fetchFilterRules(supabase);
   console.log(`   ✅ ${rules.excludedChains.size} chain rules, ${rules.excludedStatuses.size} status rules, allowlist: ${rules.allowlist.size} entries`);
 
+  // Global status cleanup: delete any raw_places row whose business_status is
+  // in excludedStatuses, across all areas. The per-area stale delete only covers
+  // rows whose search_area matches the current run — this catches everything else
+  // (different area, null search_area, manually inserted rows, etc.).
+  if (rules.excludedStatuses.size > 0) {
+    const statusList = [...rules.excludedStatuses];
+    const { count, error: cleanupError } = await supabase
+      .from('raw_places')
+      .delete({ count: 'exact' })
+      .in('business_status', statusList);
+    if (cleanupError) throw new Error(`Status cleanup failed: ${cleanupError.message}`);
+    if (count > 0) {
+      console.log(`   🗑  Removed ${count} row(s) with excluded business_status (${statusList.join(', ')})`);
+    }
+  }
+
   const results = [];
   for (const key of areaKeys) {
     const result = await runArea(key, supabase, rules, { skipEditorial });
