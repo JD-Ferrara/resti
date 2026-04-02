@@ -8,7 +8,7 @@
 // Filtering rules (applied in order):
 //   1. DESTINATION_QSR allowlist → always pass, skip remaining checks
 //   2. EXCLUDED_CHAINS exact match → exclude
-//   3. businessStatus === CLOSED_PERMANENTLY or TEMPORARILY_CLOSED → exclude
+//   3. businessStatus === CLOSED_PERMANENTLY or CLOSED_TEMPORARILY → exclude
 //   4. rating < FILTERS.minRating → exclude
 //   5. userRatingCount < FILTERS.minReviews → exclude
 
@@ -73,7 +73,7 @@ export function filterPlaces(places) {
       excluded.push({ place, reason: 'permanently_closed', detail: name });
       continue;
     }
-    if (status === 'TEMPORARILY_CLOSED') {
+    if (status === 'CLOSED_TEMPORARILY') {
       excluded.push({ place, reason: 'temporarily_closed', detail: name });
       continue;
     }
