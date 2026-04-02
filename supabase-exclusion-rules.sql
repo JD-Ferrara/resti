@@ -62,6 +62,7 @@ BEGIN
 END;
 $$;
 
+DROP TRIGGER IF EXISTS trg_exclusion_rules_updated_at ON place_exclusion_rules;
 CREATE TRIGGER trg_exclusion_rules_updated_at
   BEFORE UPDATE ON place_exclusion_rules
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
