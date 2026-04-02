@@ -19,10 +19,12 @@ import 'dotenv/config';
 import { writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { createClient } from '@supabase/supabase-js';
 
 import { fetchAllPlaces } from './fetch-places.js';
 import { filterPlaces, getDisplayName, normalizePriceLevel } from './filter-places.js';
 import { enrichWithNeighborhood } from './detect-neighborhood.js';
+import { fetchFilterRules } from './filter-rules.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUTPUT_DIR = join(__dirname, 'output');
@@ -98,13 +100,19 @@ async function run() {
   console.log('  Hudson Yards — Google Places vs. Existing DB Diff');
   console.log('══════════════════════════════════════════════════════\n');
 
+  const supabase = createClient(
+    process.env.VITE_SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY,
+  );
+  const rules = await fetchFilterRules(supabase);
+
   // 1. Fetch
   console.log('Step 1/3: Fetching from Google Places...');
   const raw = await fetchAllPlaces('hudson_yards');
 
   // 2. Filter
   console.log('\nStep 2/3: Applying filters...');
-  const { kept, excluded } = filterPlaces(raw);
+  const { kept, excluded } = filterPlaces(raw, rules);
   console.log(`  Kept: ${kept.length}  |  Excluded: ${excluded.length}`);
 
   // 3. Neighborhood detection
