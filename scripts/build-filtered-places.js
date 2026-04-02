@@ -76,25 +76,37 @@ editorial-quality guide that locals and visitors use to find great meals and dri
   Le Pain Quotidien, generic café chains)
 • Convenience stores, bodegas, delis without a distinct identity, and food kiosks
 • Grocery stores and supermarkets
-• Hotel venues that are clearly generic lobby cafes with no culinary identity
+• Hotel venues that are clearly generic lobby cafes or bars with no culinary identity
 • Vending machines, catering companies, private dining clubs (not open to public)
 • Franchise snack/dessert chains (Auntie Anne's, Cinnabon, Jamba Juice, etc.)
 • Sports bar chains (Dave & Buster's, Buffalo Wild Wings, Twin Peaks, Yard House, etc.)
+• Street food carts, hot dog carts, and outdoor food stands unless they are a widely
+  recognized NYC institution with a genuine following (not just "decent for the area")
+• Generic halal carts and taco counters without a distinct identity or reputation
+• Diners and generic 24-hour breakfast spots — unless they have a genuine local cult
+  following or are truly unique; a diner being "convenient" is not enough to include it
+• Generic QSR-style takeout counters (gyro shops, halal spots, quick taqueria counters)
+  where the concept is interchangeable with dozens of others in the city
+• Hotel bars that exist primarily to serve hotel guests — only include if the cocktail or
+  food program is a genuine destination in its own right, independent of the hotel
 
 ━━━ INCLUDE these types ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 • Full-service, sit-down restaurants of any cuisine
 • Chef-driven or concept-driven dining destinations
-• Destination cocktail bars, speakeasies, and hotel bars with a distinct identity
-  — a bar does NOT need a food program to qualify; drinks-only is fine
+• Destination cocktail bars, speakeasies, and hotel bars with a distinct, celebrated
+  bar program — a bar does NOT need a food program to qualify; drinks-only is fine
 • Notable neighborhood bars: wine bars, natural wine bars, craft cocktail lounges,
   sake bars, mezcal bars, champagne bars, etc.
 • Destination casual dining, brunch spots, and lunch counters worth a visit
 • Unique food concepts with a clear identity and local following
 • Well-regarded ethnic restaurants with quality ingredients and a loyal following
 • Notable food halls or market-restaurant concepts (e.g., Eataly, José Andrés concepts)
-• Hotel restaurants and bars that are genuine dining or drinking destinations
-• Well-known counter-service or QSR spots that are genuine NYC institutions
-  (a famous taco counter, a legendary pizza slice spot, a renowned sandwich shop)
+• Breweries and taprooms with a food program, if they are a genuine neighborhood anchor
+• Hotel restaurants and bars that are a destination independent of the hotel itself
+• Well-known counter-service or QSR spots that are genuine NYC institutions with a
+  city-wide or national reputation (e.g., a taco counter widely cited as best in NYC,
+  a legendary pizza slice, a renowned sandwich shop) — the bar is high; "good for the
+  neighborhood" is not enough
 
 ━━━ GEOGRAPHY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 • Use "Custom District (geofence-verified)" as the authoritative geographic signal:
@@ -121,7 +133,16 @@ editorial-quality guide that locals and visitors use to find great meals and dri
   - types ["bar"] or ["night_club"] + high rating, no price level → likely INCLUDE as a
     destination bar; only exclude if name/types clearly signal a generic chain or dive bar
   - types ["fast_food_restaurant"] or ["meal_takeaway"] + price $ → almost always EXCLUDE
-    unless the name strongly suggests a well-known NYC institution
+    unless the name strongly suggests a well-known NYC institution with a city-wide reputation
+  - types ["meal_takeaway"] with a name that reads as a generic QSR counter (halal, gyro,
+    taco, hot dog) → EXCLUDE unless you can identify a specific city-wide reputation
+• Hotel bars: INCLUDE only if the bar program itself has a reputation as a destination
+  (press coverage, notable cocktail program, recognized bartenders). A nice hotel with a
+  bar is not enough — ask: "would someone travel here specifically for this bar?"
+• Breweries / taprooms with food: INCLUDE if they are a genuine neighborhood anchor with
+  a craft beer identity; exclude if the food is an afterthought and the space is generic.
+• Diners: EXCLUDE unless there is clear evidence of a cult following or unique identity.
+  Being open late or being a local staple for the neighborhood is not enough.
 • Editorial summary is a helpful confirming signal when present, NOT a requirement.
   "None" means it wasn't available at discovery time — not that the place is low quality.
 • When in genuine doubt about a borderline case, lean toward EXCLUDING.
