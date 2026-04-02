@@ -109,7 +109,8 @@ INSERT INTO place_allowlist (name, notes) VALUES
   ('Joe''s Pizza',       'Classic NYC institution — worth including despite QSR format'),
   ('J.G. Melon',         'Old-school NYC burger spot — neighborhood institution'),
   ('Superiority Burger', 'James Beard-recognized vegetarian burger spot'),
-  ('Dirt Candy',         'Michelin-starred vegetable-focused restaurant by Amanda Cohen')
+  ('Dirt Candy',         'Michelin-starred vegetable-focused restaurant by Amanda Cohen'),
+  ('Los Tacos No. 1',    'Widely cited as best tacos in NYC — destination QSR despite counter-service format')
 ON CONFLICT (name) DO NOTHING;
 
 
@@ -122,8 +123,10 @@ INSERT INTO place_exclusion_rules (rule_type, value, exclusion_reason, category,
    'Exclude places rated below 3.5 on Google. Lowerable for newer openings without accumulated reviews.'),
   ('min_reviews',     '10',                'too_few_reviews',   'quality_threshold',
    'Exclude places with fewer than 10 Google reviews. Lowered from 25 to catch newer openings like Limusina in Hudson Yards.'),
-  ('business_status', 'CLOSED_PERMANENTLY','permanently_closed','business_status',
-   'Exclude places Google has marked as permanently closed.')
+  ('business_status', 'CLOSED_PERMANENTLY', 'permanently_closed', 'business_status',
+   'Exclude places Google has marked as permanently closed.'),
+  ('business_status', 'TEMPORARILY_CLOSED', 'temporarily_closed', 'business_status',
+   'Exclude places Google has marked as temporarily closed. Re-evaluate once they reopen.')
 ON CONFLICT (rule_type, value) DO NOTHING;
 
 
