@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS raw_places (
 
   -- Why this place was excluded (set when status = 'excluded')
   exclusion_reason        TEXT,
-  -- chain_excluded | low_rating | too_few_reviews | permanently_closed
+  -- chain_excluded | low_rating | too_few_reviews | permanently_closed | temporarily_closed | removed_from_results
 
   -- Full raw API response preserved for debugging / re-processing
   raw_data                JSONB

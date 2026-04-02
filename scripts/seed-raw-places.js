@@ -347,6 +347,32 @@ async function runArea(areaKey, supabase, { skipEditorial = false } = {}) {
     console.log(`  Upserted ${upserted}/${keptRows.length}...`);
   }
 
+  // Expire stale pending rows — places that were pending from a prior run but
+  // are no longer in the current kept set (e.g. now temp-closed, filtered out,
+  // or simply not returned by the API this run). Only touches 'pending' rows;
+  // matched/queued/imported rows are left alone regardless.
+  const keptIds = keptRows.map((r) => r.google_place_id);
+  if (keptIds.length > 0) {
+    const { data: stalePending, error: fetchStaleError } = await supabase
+      .from('raw_places')
+      .select('google_place_id')
+      .eq('search_area', areaKey)
+      .eq('status', 'pending')
+      .not('google_place_id', 'in', `(${keptIds.join(',')})`);
+
+    if (fetchStaleError) throw new Error(`Supabase stale fetch failed: ${fetchStaleError.message}`);
+
+    if (stalePending?.length > 0) {
+      const staleIds = stalePending.map((r) => r.google_place_id);
+      const { error: expireError } = await supabase
+        .from('raw_places')
+        .update({ status: 'excluded', exclusion_reason: 'removed_from_results' })
+        .in('google_place_id', staleIds);
+      if (expireError) throw new Error(`Supabase stale expire failed: ${expireError.message}`);
+      console.log(`  🗑  Expired ${staleIds.length} stale pending row(s) no longer in current results`);
+    }
+  }
+
   console.log(`\n  ✅ Done — ${keptRows.length} pending (ready for Step 2 enrichment), ${totalExcluded} excluded (discarded)\n`);
   return { areaKey, pending: keptRows.length, excluded: totalExcluded };
 }
