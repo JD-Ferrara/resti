@@ -269,6 +269,7 @@ function placeToMonitoringUpdate(place) {
 
   return {
     google_place_id:       place.id,
+    name:                  getDisplayName(place),   // NOT NULL — required for safe upsert
     google_rating:         place.rating ?? null,
     google_review_count:   place.userRatingCount ?? null,
     price_level:           level,
