@@ -24,6 +24,7 @@ import { fetchAllPlaces } from './fetch-places.js';
 import { filterPlaces, getDisplayName, normalizePriceLevel } from './filter-places.js';
 import { enrichWithNeighborhood, getCustomDistrictsGeoJSON } from './detect-neighborhood.js';
 import { SEARCH_AREAS, PLACES_DETAILS_ENRICHMENT_FIELD_MASK } from './places-config.js';
+import { fetchFilterRules } from './filter-rules.js';
 
 const BATCH_SIZE = 50; // rows per Supabase upsert / delete batch
 
@@ -297,7 +298,7 @@ async function fetchExistingIds(supabase, placeIds) {
 
 // ── Run pipeline for a single area ────────────────────────
 
-async function runArea(areaKey, supabase, { skipEditorial = false } = {}) {
+async function runArea(areaKey, supabase, rules, { skipEditorial = false } = {}) {
   const areaConfig = SEARCH_AREAS[areaKey];
 
   console.log(`\n${'═'.repeat(56)}`);
@@ -310,7 +311,7 @@ async function runArea(areaKey, supabase, { skipEditorial = false } = {}) {
 
   // 2. Filter (chains, closed status, rating, review count)
   console.log(`\n[2/5] Filtering ${raw.length} results...`);
-  const { kept, excluded } = filterPlaces(raw);
+  const { kept, excluded } = filterPlaces(raw, rules);
   console.log(`  ✅ Kept: ${kept.length}  |  🚫 Excluded: ${excluded.length}`);
 
   // 3. Neighborhood detection + polygon clip
@@ -433,9 +434,13 @@ async function run() {
   console.log(`\n🚀 Places pipeline — ${areaKeys.length} area(s): ${areaKeys.join(', ')}`);
   if (skipEditorial) console.log('   Editorial summary enrichment: SKIPPED (--skip-editorial)');
 
+  console.log('\n   Loading filter rules from DB...');
+  const rules = await fetchFilterRules(supabase);
+  console.log(`   ✅ ${rules.excludedChains.size} chain rules, ${rules.excludedStatuses.size} status rules, allowlist: ${rules.allowlist.size} entries`);
+
   const results = [];
   for (const key of areaKeys) {
-    const result = await runArea(key, supabase, { skipEditorial });
+    const result = await runArea(key, supabase, rules, { skipEditorial });
     results.push(result);
   }
 
