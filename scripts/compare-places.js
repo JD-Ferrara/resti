@@ -111,6 +111,18 @@ async function run() {
   console.log('\nStep 3/3: Detecting NYC neighborhoods...');
   const enriched = await enrichWithNeighborhood(kept);
 
+  for (const place of enriched.slice(0, 5)) {
+    console.log('GOOGLE PLACE:', {
+      id: place.id,
+      name: place.name,
+    });
+  }
+  for (const r of existingList.slice(0, 5)) {
+    console.log('DB PLACE:', {
+      google_place_id: r.google_place_id,
+    });
+  }
+
   // 4. Compare (by google_place_id / place.id)
   const googleById = new Map(enriched.map((p) => [p.id, p]));
 
