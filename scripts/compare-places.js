@@ -88,8 +88,8 @@ async function run() {
 
   const { data: existingRestaurants, error: existingErr } = await supabase
     .from('restaurants')
-    .select('id, name, google_place_id')
-    .eq('search_area', areaKey);
+    .select('id, name, google_place_id, custom_district')
+    .eq('custom_district', areaKey);
 
   if (existingErr) throw new Error(`Failed to load restaurants: ${existingErr.message}`);
 
