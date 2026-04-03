@@ -95,7 +95,7 @@ async function run() {
 
   const existingList = existingRestaurants ?? [];
   const existingById = new Map(
-    existingList.filter((r) => r.google_place_id).map((r) => [r.google_place_id, r])
+    existingList.map((r) => [r.google_place_id, r])
   );
 
   // 1. Fetch
@@ -114,7 +114,7 @@ async function run() {
   for (const place of enriched.slice(0, 5)) {
     console.log('GOOGLE PLACE:', {
       id: place.id,
-      name: place.name,
+      name: getDisplayName(place),
     });
   }
   for (const r of existingList.slice(0, 5)) {
@@ -122,6 +122,13 @@ async function run() {
       google_place_id: r.google_place_id,
     });
   }
+
+  const dbIds = new Set(existingList.map((r) => r.google_place_id));
+  let matchCount = 0;
+  for (const p of enriched) {
+    if (dbIds.has(p.id)) matchCount++;
+  }
+  console.log('DIRECT MATCH COUNT:', matchCount);
 
   // 4. Compare (by google_place_id / place.id)
   const googleById = new Map(enriched.map((p) => [p.id, p]));
