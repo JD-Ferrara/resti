@@ -323,12 +323,12 @@ async function fetchExistingIds(supabase, placeIds) {
 }
 
 // ── Re-check existing places against Google (Basic tier) ──────
-// For every non-excluded place already in raw_places for this area, fetches
+// For every raw_places row for this area (pending and excluded), fetches
 // fresh data from Google by place ID using a Basic-tier field mask. Applies
 // the filter rules (loaded from place_exclusion_rules) to the current Google
 // data. No hardcoded logic — rules come entirely from the DB.
-//   • Still passes  → monitoring fields refreshed, status stays pending
-//   • Now fails     → tagged status='excluded' with reason, row kept for audit
+//   • Passes filterPlaces  → monitoring fields refreshed, status pending, exclusion_reason cleared
+//   • Fails filterPlaces    → tagged status='excluded' with reason, row kept for audit
 // Returns { refreshedIds, excludedIds } — both Sets of google_place_id.
 
 const PLACE_MONITORING_FIELD_MASK = 'id,displayName,businessStatus,rating,userRatingCount,types';
@@ -336,9 +336,8 @@ const PLACE_MONITORING_FIELD_MASK = 'id,displayName,businessStatus,rating,userRa
 async function recheckExistingWithGoogle(supabase, areaKey, rules, apiKey) {
   const { data: existingRows, error } = await supabase
     .from('raw_places')
-    .select('google_place_id, name')
-    .eq('search_area', areaKey)
-    .neq('status', 'excluded');
+    .select('google_place_id, name, status')
+    .eq('search_area', areaKey);
 
   if (error) throw new Error(`Failed to load existing places for recheck: ${error.message}`);
   if (!existingRows?.length) {
@@ -346,7 +345,9 @@ async function recheckExistingWithGoogle(supabase, areaKey, rules, apiKey) {
     return { refreshedIds: new Set(), excludedIds: new Set() };
   }
 
-  console.log(`  Re-checking ${existingRows.length} existing place(s) against Google...`);
+  console.log(
+    `  Re-checking ${existingRows.length} existing place(s) against Google (pending + excluded)...`
+  );
 
   const toRefresh = [];
   const toExclude = [];
@@ -422,7 +423,17 @@ async function recheckExistingWithGoogle(supabase, areaKey, rules, apiKey) {
     }
   }
 
-  console.log(`  ✅ ${toRefresh.length} still valid  |  🚫 ${toExclude.length} newly excluded`);
+  const priorStatusById = new Map(
+    existingRows.map((r) => [r.google_place_id, r.status])
+  );
+  const restoredFromExcluded = toRefresh.filter(
+    (r) => priorStatusById.get(r.google_place_id) === 'excluded'
+  ).length;
+
+  console.log(
+    `  ✅ ${toRefresh.length} pass (incl. ${restoredFromExcluded} restored from excluded → pending)  |  ` +
+      `🚫 ${toExclude.length} excluded`
+  );
   return {
     refreshedIds: new Set(toRefresh.map((r) => r.google_place_id)),
     excludedIds:  new Set(toExclude.map((r) => r.google_place_id)),
@@ -441,10 +452,10 @@ async function runArea(areaKey, supabase, rules, { skipEditorial = false } = {})
   const apiKey = process.env.GOOGLE_PLACES_API_KEY;
   if (!apiKey) throw new Error('Missing GOOGLE_PLACES_API_KEY in .env.');
 
-  // 1. Re-check every existing non-excluded place via Google (Basic tier).
+  // 1. Re-check every existing place for the area via Google (Basic tier), including excluded.
   //    Fetches fresh businessStatus, rating, userRatingCount, and types by place ID.
   //    Applies filter rules from place_exclusion_rules — no hardcoded logic here.
-  //    Passes → monitoring fields updated, status stays pending.
+  //    Passes → monitoring fields updated, status pending, exclusion_reason cleared.
   //    Fails  → tagged status='excluded' with reason, row kept for audit trail.
   console.log('\n[1/5] Re-checking existing places against Google (Basic tier)...');
   const recheck = await recheckExistingWithGoogle(supabase, areaKey, rules, apiKey);
