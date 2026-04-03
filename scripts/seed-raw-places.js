@@ -334,8 +334,6 @@ async function fetchExistingIds(supabase, placeIds) {
 const PLACE_MONITORING_FIELD_MASK = 'id,displayName,businessStatus,rating,userRatingCount,types';
 
 async function recheckExistingWithGoogle(supabase, areaKey, rules, apiKey) {
-  const { allowlist, excludedChains, excludedStatuses, minRating, minReviews } = rules;
-
   const { data: existingRows, error } = await supabase
     .from('raw_places')
     .select('google_place_id, name')
@@ -375,19 +373,13 @@ async function recheckExistingWithGoogle(supabase, areaKey, rules, apiKey) {
     const name   = fresh.displayName?.text ?? row.name ?? '';
     const status = fresh.businessStatus ?? null;
 
-    // Apply rules in the same order as filterPlaces() — all values come from the DB
-    let exclusionReason = null;
-    if (!allowlist.has(name)) {
-      if (excludedChains.has(name)) {
-        exclusionReason = 'chain_excluded';
-      } else if (status && excludedStatuses.has(status)) {
-        exclusionReason = status.toLowerCase();
-      } else if (minRating > 0 && (fresh.rating ?? 0) < minRating) {
-        exclusionReason = 'low_rating';
-      } else if (minReviews > 0 && (fresh.userRatingCount ?? 0) < minReviews) {
-        exclusionReason = 'too_few_reviews';
-      }
-    }
+    // Delegate to the same filter used by filterPlaces() so rules stay in one place.
+    const { excluded: recheckExcluded } = filterPlaces([fresh], rules);
+    const exclusionReason = recheckExcluded.length > 0 ? recheckExcluded[0].reason : null;
+
+    console.log(
+      `  · ${name} | businessStatus=${status ?? null} | rating=${fresh.rating ?? null} | userRatingCount=${fresh.userRatingCount ?? null} | exclusionReason=${exclusionReason ?? null}`
+    );
 
     const base = {
       google_place_id:       row.google_place_id,
