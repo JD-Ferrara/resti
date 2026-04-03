@@ -284,6 +284,32 @@ function placeToMonitoringUpdate(place) {
   };
 }
 
+// ── Shape an exclusion update for an existing place that now fails filters ──
+// Used when a place is already in raw_places but Google's current data causes
+// it to fail quality filters (e.g., temporarily closed, rating dropped).
+// Preserves editorial_summary and hours — does NOT overwrite them.
+// Sets status → 'excluded' so the record is retained for audit but filtered
+// out of downstream pipelines.
+
+function placeToExclusionUpdate(place, reason) {
+  const { level, range } = normalizePriceLevel(place);
+
+  return {
+    google_place_id:       place.id,
+    name:                  getDisplayName(place),   // NOT NULL — required for safe upsert
+    google_rating:         place.rating ?? null,
+    google_review_count:   place.userRatingCount ?? null,
+    price_level:           level,
+    price_range:           range,
+    business_status:       place.businessStatus ?? null,
+    is_permanently_closed: place.businessStatus === 'CLOSED_PERMANENTLY',
+    google_types:          place.types ?? null,
+    last_pipeline_run:     new Date().toISOString(),
+    status:                'excluded',
+    exclusion_reason:      reason,
+  };
+}
+
 // ── Look up which of the given place IDs already exist in DB ─
 
 async function fetchExistingIds(supabase, placeIds) {
@@ -330,10 +356,15 @@ async function runArea(areaKey, supabase, rules, { skipEditorial = false } = {})
   //    Only called for places NOT already in raw_places. Existing rows keep their stored
   //    editorial_summary and hours, so re-runs cost nothing for places already in the DB.
   console.log(`\n[4/5] Place Details enrichment (new places only)...`);
-  const clippedIds = clipped.map((p) => p.id);
-  const existingIds = await fetchExistingIds(supabase, clippedIds);
+  const clippedIds  = clipped.map((p) => p.id);
+  const excludedIds = excluded.map((e) => e.place.id);
+  // Look up existing IDs across both kept and filtered-out sets so we can
+  // tag previously-stored places that now fail quality filters.
+  const existingIds = await fetchExistingIds(supabase, [...clippedIds, ...excludedIds]);
   const newPlaces      = clipped.filter((p) => !existingIds.has(p.id));
   const existingPlaces = clipped.filter((p) =>  existingIds.has(p.id));
+  // Existing places that now fail filters — tag as excluded rather than delete.
+  const existingExcluded = excluded.filter((e) => existingIds.has(e.place.id));
   console.log(`  ${existingPlaces.length} existing (monitoring refresh)  |  ${newPlaces.length} new (Place Details required)`);
 
   let newPlacesWithDetails = newPlaces;
@@ -354,17 +385,17 @@ async function runArea(areaKey, supabase, rules, { skipEditorial = false } = {})
   }
 
   // 5. Sync to database
-  //    a) Monitoring refresh for existing places — partial upsert preserving
+  //    a) Monitoring refresh for existing kept places — partial upsert preserving
   //       editorial_summary, hours, and other fields not in the discovery response.
-  //    b) Full insert for new places.
-  //    c) Delete stale rows — anything in raw_places for this area that is no longer
-  //       in the current kept set (temp-closed, permanently closed, newly filtered out,
-  //       or simply not returned by Google this run). Runs in the same pass so the
-  //       table reflects the current state of the world after every run.
+  //    b) Full insert for new kept places.
+  //    c) Tag existing places that now fail filters as 'excluded' — preserves the record
+  //       for audit and downstream filtering rather than silently deleting the row.
+  //    d) Delete stale rows — anything in raw_places for this area that is no longer
+  //       returned by Google at all this run (not in kept OR newly-tagged excluded sets).
   const totalExcluded = excluded.length + outOfBounds.length;
   console.log(`\n[5/5] Syncing to database...`);
 
-  // 5a. Monitoring refresh for existing places
+  // 5a. Monitoring refresh for existing kept places
   if (existingPlaces.length > 0) {
     const monitoringRows = existingPlaces.map(placeToMonitoringUpdate);
     for (let i = 0; i < monitoringRows.length; i += BATCH_SIZE) {
@@ -377,7 +408,7 @@ async function runArea(areaKey, supabase, rules, { skipEditorial = false } = {})
     console.log(`  ✅ Refreshed monitoring fields for ${existingPlaces.length} existing place(s)`);
   }
 
-  // 5b. Full insert for new places
+  // 5b. Full insert for new kept places
   if (newPlacesWithDetails.length > 0) {
     const newRows = newPlacesWithDetails.map((p) => placeToRow(p, areaKey));
     for (let i = 0; i < newRows.length; i += BATCH_SIZE) {
@@ -390,9 +421,37 @@ async function runArea(areaKey, supabase, rules, { skipEditorial = false } = {})
     console.log(`  ✅ Inserted ${newPlacesWithDetails.length} new place(s)`);
   }
 
-  // 5c. Delete stale rows for this area not in the current kept set
-  if (clippedIds.length > 0) {
-    const keptSet = new Set(clippedIds);
+  // 5c. Tag existing places that now fail filters as 'excluded'
+  //     These were previously in raw_places but Google's current data (e.g., CLOSED_TEMPORARILY,
+  //     rating drop) means they no longer pass. We retain the row so there's an audit trail
+  //     and downstream pipelines can filter on status='excluded'.
+  if (existingExcluded.length > 0) {
+    const exclusionRows = existingExcluded.map(({ place, reason }) =>
+      placeToExclusionUpdate(place, reason)
+    );
+    for (let i = 0; i < exclusionRows.length; i += BATCH_SIZE) {
+      const batch = exclusionRows.slice(i, i + BATCH_SIZE);
+      const { error } = await supabase
+        .from('raw_places')
+        .upsert(batch, { onConflict: 'google_place_id' });
+      if (error) throw new Error(`Supabase exclusion tag upsert failed: ${error.message}`);
+    }
+    const byReason = {};
+    for (const { reason, detail } of existingExcluded) {
+      byReason[reason] = (byReason[reason] ?? 0) + 1;
+      if (detail) console.log(`     · ${reason}: ${detail}`);
+    }
+    console.log(`  🚫 Tagged ${existingExcluded.length} existing place(s) as excluded`);
+  }
+
+  // 5d. Delete stale rows — places in raw_places for this area that were NOT returned
+  //     by Google this run at all (not in kept set AND not in newly-tagged excluded set).
+  //     Places that Google still returns but we excluded above are retained (step 5c).
+  const activeIds = new Set([
+    ...clippedIds,
+    ...existingExcluded.map((e) => e.place.id),
+  ]);
+  if (activeIds.size > 0) {
     const { data: allAreaRows, error: fetchErr } = await supabase
       .from('raw_places')
       .select('google_place_id')
@@ -401,7 +460,7 @@ async function runArea(areaKey, supabase, rules, { skipEditorial = false } = {})
 
     const staleIds = (allAreaRows ?? [])
       .map((r) => r.google_place_id)
-      .filter((id) => !keptSet.has(id));
+      .filter((id) => !activeIds.has(id));
 
     if (staleIds.length > 0) {
       for (let i = 0; i < staleIds.length; i += BATCH_SIZE) {
@@ -412,11 +471,11 @@ async function runArea(areaKey, supabase, rules, { skipEditorial = false } = {})
           .in('google_place_id', batch);
         if (error) throw new Error(`Supabase stale delete failed: ${error.message}`);
       }
-      console.log(`  🗑  Removed ${staleIds.length} stale row(s) no longer in current results`);
+      console.log(`  🗑  Removed ${staleIds.length} stale row(s) no longer returned by Google`);
     }
   }
 
-  console.log(`\n  ✅ Done — ${clipped.length} active (${existingPlaces.length} refreshed, ${newPlacesWithDetails.length} new), ${totalExcluded} filtered out\n`);
+  console.log(`\n  ✅ Done — ${clipped.length} active (${existingPlaces.length} refreshed, ${newPlacesWithDetails.length} new), ${existingExcluded.length} tagged excluded, ${totalExcluded - existingExcluded.length} filtered before DB\n`);
   return { areaKey, active: clipped.length, newCount: newPlacesWithDetails.length, excluded: totalExcluded };
 }
 

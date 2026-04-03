@@ -126,7 +126,7 @@ INSERT INTO place_exclusion_rules (rule_type, value, exclusion_reason, category,
    'Exclude places with fewer than 10 Google reviews. Lowered from 25 to catch newer openings like Limusina in Hudson Yards.'),
   ('business_status', 'CLOSED_PERMANENTLY', 'permanently_closed', 'business_status',
    'Exclude places Google has marked as permanently closed.'),
-  ('business_status', 'TEMPORARILY_CLOSED', 'temporarily_closed', 'business_status',
+  ('business_status', 'CLOSED_TEMPORARILY', 'temporarily_closed', 'business_status',
    'Exclude places Google has marked as temporarily closed. Re-evaluate once they reopen.')
 ON CONFLICT (rule_type, value) DO NOTHING;
 
