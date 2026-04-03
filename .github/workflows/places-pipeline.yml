@@ -179,12 +179,12 @@ jobs:
 
       - name: Run comparison (Hudson Yards only)
         if: contains(steps.areas.outputs.list, 'hudson_yards')
-        run: node scripts/compare-hudson-yards.js --save
+        run: node scripts/compare-places.js --area hudson_yards --save
 
       - name: Upload comparison report
         if: contains(steps.areas.outputs.list, 'hudson_yards')
         uses: actions/upload-artifact@v4
         with:
           name: hudson-yards-compare-${{ github.run_number }}
-          path: scripts/output/hudson-yards-compare.json
+          path: scripts/output/hudson_yards-compare.json
           retention-days: 30

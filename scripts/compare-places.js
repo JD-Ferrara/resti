@@ -1,19 +1,19 @@
 // ============================================================
-// compare-hudson-yards.js — Diff Google Places vs. existing DB
+// compare-places.js — Diff Google Places vs. existing DB
 // ============================================================
-// Fetches restaurants from Google Places for the hudson_yards area,
+// Fetches restaurants from Google Places for a configured area,
 // applies filters, detects neighborhoods, then compares results against
-// the 27 existing Hudson Yards restaurants in the database.
+// restaurants in the database for that search_area (by google_place_id).
 //
 // Output categories:
-//   ✅ MATCHED     — in Google AND in our DB (by normalized name)
+//   ✅ MATCHED     — in Google AND in our DB (by google_place_id)
 //   🆕 NEW FINDS   — in Google, NOT in our DB (potential additions)
 //   ❓ NOT IN GOOGLE — in our DB, not found in this Google fetch
 //   🚫 EXCLUDED    — filtered out (with reason)
 //
 // Usage:
-//   node scripts/compare-hudson-yards.js
-//   node scripts/compare-hudson-yards.js --save   (also writes JSON report)
+//   node scripts/compare-places.js --area hudson_yards
+//   node scripts/compare-places.js --area hudson_yards --save   (also writes JSON report)
 
 import 'dotenv/config';
 import { writeFileSync, mkdirSync } from 'fs';
@@ -25,53 +25,31 @@ import { fetchAllPlaces } from './fetch-places.js';
 import { filterPlaces, getDisplayName, normalizePriceLevel } from './filter-places.js';
 import { enrichWithNeighborhood } from './detect-neighborhood.js';
 import { fetchFilterRules } from './filter-rules.js';
+import { SEARCH_AREAS } from './places-config.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUTPUT_DIR = join(__dirname, 'output');
 
-// ── Existing restaurant data ──────────────────────────────
-// Hardcoded from supabase-seed.sql so no Supabase connection is needed
-// to run this comparison. Update if the seed data changes.
-const EXISTING_RESTAURANTS = [
-  { id: 1,  name: 'Queensyard' },
-  { id: 2,  name: "Zou Zou's" },
-  { id: 3,  name: 'Estiatorio Milos' },
-  { id: 4,  name: 'Peak with Priceless' },
-  { id: 5,  name: 'Greywind' },
-  { id: 6,  name: 'Spygold' },
-  { id: 7,  name: 'Electric Lemon' },
-  { id: 8,  name: 'BondST' },
-  { id: 9,  name: "P.J. Clarke's" },
-  { id: 10, name: 'Mercado Little Spain' },
-  { id: 11, name: 'La Barra' },
-  { id: 12, name: 'Miznon' },
-  { id: 13, name: 'Bronx Brewery Kitchen' },
-  { id: 14, name: 'Shake Shack' },
-  { id: 15, name: 'Limusina' },
-  { id: 16, name: 'Kyma' },
-  { id: 17, name: 'NIZUC' },
-  { id: 18, name: 'Russ & Daughters' },
-  { id: 19, name: 'Oyamel' },
-  { id: 20, name: 'ANA Bar and Eatery' },
-  { id: 21, name: 'Eataly' },
-  { id: 22, name: 'Fuku' },
-  { id: 23, name: 'Ci Siamo' },
-  { id: 24, name: 'Papa San' },
-  { id: 25, name: 'Locanda Verde' },
-  { id: 26, name: 'Saverne' },
-  { id: 27, name: 'Jajaja Mexicana' },
-];
+function parseArgs() {
+  const args = process.argv.slice(2);
+  const areaIdx = args.indexOf('--area');
+  const areaKey = areaIdx !== -1 ? args[areaIdx + 1]?.trim() : null;
+  const save = args.includes('--save');
+  return { areaKey, save };
+}
 
-// ── Name normalization ────────────────────────────────────
-// Strips punctuation and lowercases for fuzzy matching.
-// "P.J. Clarke's" → "pj clarkes", "Zou Zou's" → "zou zous"
-function normalizeName(name) {
-  return name
-    .toLowerCase()
-    .replace(/[''`]/g, '')       // remove apostrophes
-    .replace(/[^a-z0-9\s]/g, '') // remove remaining punctuation
-    .replace(/\s+/g, ' ')        // collapse whitespace
-    .trim();
+function resolveAreaKey(areaArg) {
+  if (!areaArg) {
+    const valid = Object.keys(SEARCH_AREAS).join(', ');
+    console.error('Usage: node scripts/compare-places.js --area <area_key> [--save]');
+    console.error(`  Available areas: ${valid}`);
+    process.exit(1);
+  }
+  if (!SEARCH_AREAS[areaArg]) {
+    console.error(`Unknown area "${areaArg}". Valid: ${Object.keys(SEARCH_AREAS).join(', ')}`);
+    process.exit(1);
+  }
+  return areaArg;
 }
 
 // ── Formatting helpers ────────────────────────────────────
@@ -94,10 +72,12 @@ function formatPlace(place) {
 // ── Main ──────────────────────────────────────────────────
 
 async function run() {
-  const save = process.argv.includes('--save');
+  const { areaKey: areaArg, save } = parseArgs();
+  const areaKey = resolveAreaKey(areaArg);
+  const areaLabel = SEARCH_AREAS[areaKey].name;
 
   console.log('\n══════════════════════════════════════════════════════');
-  console.log('  Hudson Yards — Google Places vs. Existing DB Diff');
+  console.log(`  ${areaLabel} — Google Places vs. Existing DB Diff`);
   console.log('══════════════════════════════════════════════════════\n');
 
   const supabase = createClient(
@@ -106,9 +86,21 @@ async function run() {
   );
   const rules = await fetchFilterRules(supabase);
 
+  const { data: existingRestaurants, error: existingErr } = await supabase
+    .from('restaurants')
+    .select('id, name, google_place_id')
+    .eq('search_area', areaKey);
+
+  if (existingErr) throw new Error(`Failed to load restaurants: ${existingErr.message}`);
+
+  const existingList = existingRestaurants ?? [];
+  const existingById = new Map(
+    existingList.filter((r) => r.google_place_id).map((r) => [r.google_place_id, r])
+  );
+
   // 1. Fetch
   console.log('Step 1/3: Fetching from Google Places...');
-  const raw = await fetchAllPlaces('hudson_yards');
+  const raw = await fetchAllPlaces(areaKey);
 
   // 2. Filter
   console.log('\nStep 2/3: Applying filters...');
@@ -119,30 +111,24 @@ async function run() {
   console.log('\nStep 3/3: Detecting NYC neighborhoods...');
   const enriched = await enrichWithNeighborhood(kept);
 
-  // 4. Compare
-  const existingByNorm = new Map(
-    EXISTING_RESTAURANTS.map((r) => [normalizeName(r.name), r])
-  );
-  const googleByNorm = new Map(
-    enriched.map((p) => [normalizeName(getDisplayName(p)), p])
-  );
+  // 4. Compare (by google_place_id / place.id)
+  const googleById = new Map(enriched.map((p) => [p.id, p]));
 
   const matched = [];
   const newFinds = [];
   const notInGoogle = [];
 
-  // Find matched and new finds
-  for (const [normName, place] of googleByNorm.entries()) {
-    if (existingByNorm.has(normName)) {
-      matched.push({ existing: existingByNorm.get(normName), place });
+  for (const place of enriched) {
+    if (existingById.has(place.id)) {
+      matched.push({ existing: existingById.get(place.id), place });
     } else {
       newFinds.push(place);
     }
   }
 
-  // Find restaurants in our DB not found in Google results
-  for (const [normName, existing] of existingByNorm.entries()) {
-    if (!googleByNorm.has(normName)) {
+  for (const existing of existingList) {
+    const gid = existing.google_place_id;
+    if (gid == null || !googleById.has(gid)) {
       notInGoogle.push(existing);
     }
   }
@@ -201,7 +187,7 @@ async function run() {
   console.log('══════════════════════════════════════════════════════');
   console.log(`  Raw from Google:     ${raw.length}`);
   console.log(`  After filtering:     ${enriched.length}`);
-  console.log(`  Matched to our DB:   ${matched.length}/${EXISTING_RESTAURANTS.length}`);
+  console.log(`  Matched to our DB:   ${matched.length}/${existingList.length}`);
   console.log(`  New potential adds:  ${newFinds.length}`);
   console.log(`  Our DB, no match:    ${notInGoogle.length}`);
   console.log(`  Excluded:            ${excluded.length}\n`);
@@ -211,7 +197,7 @@ async function run() {
   if (save) {
     const report = {
       generated_at: new Date().toISOString(),
-      area: 'hudson_yards',
+      area: areaKey,
       summary: {
         raw_count: raw.length,
         filtered_count: enriched.length,
@@ -255,7 +241,7 @@ async function run() {
     };
 
     mkdirSync(OUTPUT_DIR, { recursive: true });
-    const outPath = join(OUTPUT_DIR, 'hudson-yards-compare.json');
+    const outPath = join(OUTPUT_DIR, `${areaKey}-compare.json`);
     writeFileSync(outPath, JSON.stringify(report, null, 2));
     console.log(`💾 Full JSON report saved to ${outPath}\n`);
   }
