@@ -322,6 +322,128 @@ async function fetchExistingIds(supabase, placeIds) {
   return new Set((data ?? []).map((r) => r.google_place_id));
 }
 
+// ── Re-check existing places against Google (Basic tier) ──────
+// For every non-excluded place already in raw_places for this area, fetches
+// current businessStatus, rating, and userRatingCount directly from Google by
+// place ID (Basic tier — same cost tier as Nearby Search field data, ~$0.005/call).
+// Applies filter rules to that fresh data:
+//   • Still passes → monitoring refresh (rating, status, types updated, status=pending)
+//   • Now fails    → tagged status='excluded' with reason, row preserved for audit
+// This is the authoritative "did anything change?" pass. It catches closures and
+// quality drops even for places Google no longer surfaces in Nearby Search results.
+// Returns { refreshedIds, excludedIds } — both Sets of google_place_id.
+
+const PLACE_MONITORING_FIELD_MASK = 'id,displayName,businessStatus,rating,userRatingCount,types';
+
+async function recheckExistingWithGoogle(supabase, areaKey, rules, apiKey) {
+  const { allowlist, excludedChains, excludedStatuses, minRating, minReviews } = rules;
+
+  const { data: existingRows, error } = await supabase
+    .from('raw_places')
+    .select('google_place_id, name')
+    .eq('search_area', areaKey)
+    .neq('status', 'excluded');
+
+  if (error) throw new Error(`Failed to load existing places for recheck: ${error.message}`);
+  if (!existingRows || existingRows.length === 0) {
+    console.log('  No existing places to re-check');
+    return { refreshedIds: new Set(), excludedIds: new Set() };
+  }
+
+  console.log(`  Re-checking ${existingRows.length} existing place(s) against Google...`);
+
+  const toRefresh = [];
+  const toExclude = [];
+
+  for (let i = 0; i < existingRows.length; i++) {
+    if (i > 0) await new Promise((r) => setTimeout(r, 50)); // ~20 req/s
+
+    const row = existingRows[i];
+    const res = await fetch(`${PLACE_DETAILS_BASE_URL}/${row.google_place_id}`, {
+      headers: {
+        'X-Goog-Api-Key': apiKey,
+        'X-Goog-FieldMask': PLACE_MONITORING_FIELD_MASK,
+      },
+    });
+
+    if (!res.ok) {
+      // 404 = place removed from Google; other errors = transient — skip, leave unchanged
+      if (res.status !== 404) {
+        console.warn(`  ⚠️  Recheck error for ${row.google_place_id} (${res.status}) — skipping`);
+      }
+      continue;
+    }
+
+    const fresh  = await res.json();
+    const name   = fresh.displayName?.text ?? row.name ?? '';
+    const status = fresh.businessStatus ?? null;
+
+    // Apply filter rules in the same order as filterPlaces()
+    let exclusionReason = null;
+    if (!allowlist.has(name)) {
+      if (excludedChains.has(name)) {
+        exclusionReason = 'chain_excluded';
+      } else if (status && excludedStatuses.has(status)) {
+        exclusionReason = status.toLowerCase();
+      } else if (minRating > 0 && (fresh.rating ?? 0) < minRating) {
+        exclusionReason = 'low_rating';
+      } else if (minReviews > 0 && (fresh.userRatingCount ?? 0) < minReviews) {
+        exclusionReason = 'too_few_reviews';
+      }
+    }
+
+    const base = {
+      google_place_id:       row.google_place_id,
+      name,
+      business_status:       status,
+      is_permanently_closed: status === 'CLOSED_PERMANENTLY',
+      google_rating:         fresh.rating ?? null,
+      google_review_count:   fresh.userRatingCount ?? null,
+      google_types:          fresh.types ?? null,
+      last_pipeline_run:     new Date().toISOString(),
+    };
+
+    if (exclusionReason) {
+      toExclude.push({ ...base, status: 'excluded', exclusion_reason: exclusionReason });
+    } else {
+      toRefresh.push({ ...base, status: 'pending', exclusion_reason: null });
+    }
+
+    if ((i + 1) % 25 === 0 || i + 1 === existingRows.length) {
+      console.log(`  [${i + 1}/${existingRows.length}] checked`);
+    }
+  }
+
+  // Upsert monitoring refreshes (places that still pass)
+  for (let i = 0; i < toRefresh.length; i += BATCH_SIZE) {
+    const batch = toRefresh.slice(i, i + BATCH_SIZE);
+    const { error: upsertErr } = await supabase
+      .from('raw_places')
+      .upsert(batch, { onConflict: 'google_place_id' });
+    if (upsertErr) throw new Error(`Recheck monitoring upsert failed: ${upsertErr.message}`);
+  }
+
+  // Upsert exclusions (places that now fail)
+  if (toExclude.length > 0) {
+    for (const { exclusion_reason: reason, name } of toExclude) {
+      console.log(`     · ${reason}: ${name}`);
+    }
+    for (let i = 0; i < toExclude.length; i += BATCH_SIZE) {
+      const batch = toExclude.slice(i, i + BATCH_SIZE);
+      const { error: upsertErr } = await supabase
+        .from('raw_places')
+        .upsert(batch, { onConflict: 'google_place_id' });
+      if (upsertErr) throw new Error(`Recheck exclusion upsert failed: ${upsertErr.message}`);
+    }
+  }
+
+  console.log(`  ✅ ${toRefresh.length} still valid  |  🚫 ${toExclude.length} newly excluded`);
+  return {
+    refreshedIds: new Set(toRefresh.map((r) => r.google_place_id)),
+    excludedIds:  new Set(toExclude.map((r) => r.google_place_id)),
+  };
+}
+
 // ── Run pipeline for a single area ────────────────────────
 
 async function runArea(areaKey, supabase, rules, { skipEditorial = false } = {}) {
@@ -331,17 +453,32 @@ async function runArea(areaKey, supabase, rules, { skipEditorial = false } = {})
   console.log(`  ${areaConfig.name}`);
   console.log(`${'═'.repeat(56)}`);
 
-  // 1. Fetch (Basic/Advanced tier — no Enterprise fields)
-  console.log('\n[1/5] Fetching from Google Places...');
+  // API key — needed for step 1 (recheck) and step 5 (editorial enrichment).
+  const apiKey = process.env.GOOGLE_PLACES_API_KEY ?? null;
+  if (!apiKey) throw new Error('Missing GOOGLE_PLACES_API_KEY in .env.');
+
+  // 1. Re-check existing places via Google (Basic tier, ~$0.005/call).
+  //    For every non-excluded place already in raw_places for this area, fetches
+  //    current businessStatus, rating, and userRatingCount directly from Google by
+  //    place ID. Applies filter rules to that fresh data:
+  //      • Still passes → monitoring fields refreshed, status stays pending
+  //      • Now fails    → tagged status='excluded' with reason, row preserved for audit
+  //    This catches closures and quality drops even for places Google no longer surfaces
+  //    in Nearby Search results (CLOSED_TEMPORARILY places may not appear in search).
+  console.log('\n[1/6] Re-checking existing places against Google (Basic tier)...');
+  const recheckResult = await recheckExistingWithGoogle(supabase, areaKey, rules, apiKey);
+
+  // 2. Fetch new candidates (Basic/Advanced tier — no Enterprise fields)
+  console.log('\n[2/6] Fetching from Google Places (Nearby Search)...');
   const raw = await fetchAllPlaces(areaKey);
 
-  // 2. Filter (chains, closed status, rating, review count)
-  console.log(`\n[2/5] Filtering ${raw.length} results...`);
+  // 3. Filter (chains, closed status, rating, review count)
+  console.log(`\n[3/6] Filtering ${raw.length} results...`);
   const { kept, excluded } = filterPlaces(raw, rules);
   console.log(`  ✅ Kept: ${kept.length}  |  🚫 Excluded: ${excluded.length}`);
 
-  // 3. Neighborhood detection + polygon clip
-  console.log(`\n[3/5] Detecting neighborhoods...`);
+  // 4. Neighborhood detection + polygon clip
+  console.log(`\n[4/6] Detecting neighborhoods...`);
   const enriched = await enrichWithNeighborhood(kept);
 
   const { clipped, outOfBounds } = clipToPolygon(enriched, areaConfig);
@@ -352,25 +489,31 @@ async function runArea(areaKey, supabase, rules, { skipEditorial = false } = {})
   const customDistrictMatched = clipped.filter((p) => p.custom_district).length;
   console.log(`  🗺  Custom district matched: ${customDistrictMatched}/${clipped.length}`);
 
-  // 4. Place Details enrichment (Enterprise tier) — editorialSummary + regularOpeningHours.
-  //    Only called for places NOT already in raw_places. Existing rows keep their stored
-  //    editorial_summary and hours, so re-runs cost nothing for places already in the DB.
-  console.log(`\n[4/5] Place Details enrichment (new places only)...`);
+  // 5. Place Details enrichment (Enterprise tier) — editorialSummary + regularOpeningHours.
+  //    Only called for places NOT already in raw_places (new places only). Existing rows
+  //    were already handled in step 1; their editorial_summary and hours are preserved.
+  console.log(`\n[5/6] Place Details enrichment (new places only)...`);
   const clippedIds  = clipped.map((p) => p.id);
   const excludedIds = excluded.map((e) => e.place.id);
-  // Look up existing IDs across both kept and filtered-out sets so we can
-  // tag previously-stored places that now fail quality filters.
   const existingIds = await fetchExistingIds(supabase, [...clippedIds, ...excludedIds]);
-  const newPlaces      = clipped.filter((p) => !existingIds.has(p.id));
-  const existingPlaces = clipped.filter((p) =>  existingIds.has(p.id));
-  // Existing places that now fail filters — tag as excluded rather than delete.
-  const existingExcluded = excluded.filter((e) => existingIds.has(e.place.id));
-  console.log(`  ${existingPlaces.length} existing (monitoring refresh)  |  ${newPlaces.length} new (Place Details required)`);
+
+  // New places = not yet in DB at all (step 1 recheck covered all existing non-excluded rows)
+  const newPlaces = clipped.filter((p) => !existingIds.has(p.id));
+  // Previously excluded places now passing filters (came back as operational)
+  const recoveredPlaces = clipped.filter(
+    (p) => existingIds.has(p.id) && !recheckResult.refreshedIds.has(p.id)
+  );
+  // Existing places from search that were already refreshed by recheck — skip to avoid redundant write
+  const alreadyRechecked = clipped.filter((p) => recheckResult.refreshedIds.has(p.id));
+
+  console.log(
+    `  ${alreadyRechecked.length} already rechecked  |  ` +
+    `${recoveredPlaces.length} recovered (were excluded)  |  ` +
+    `${newPlaces.length} new (Place Details required)`
+  );
 
   let newPlacesWithDetails = newPlaces;
   if (!skipEditorial && newPlaces.length > 0) {
-    const apiKey = process.env.GOOGLE_PLACES_API_KEY;
-    if (!apiKey) throw new Error('Missing GOOGLE_PLACES_API_KEY in .env. Use --skip-editorial to bypass.');
     const enrichmentMap = await enrichPlaceDetails(newPlaces, apiKey);
     newPlacesWithDetails = newPlaces.map((place) => {
       const det = enrichmentMap.get(place.id);
@@ -384,31 +527,31 @@ async function runArea(areaKey, supabase, rules, { skipEditorial = false } = {})
     console.log('  Place Details SKIPPED (--skip-editorial)');
   }
 
-  // 5. Sync to database
-  //    a) Monitoring refresh for existing kept places — partial upsert preserving
-  //       editorial_summary, hours, and other fields not in the discovery response.
-  //    b) Full insert for new kept places.
-  //    c) Tag existing places that now fail filters as 'excluded' — preserves the record
-  //       for audit and downstream filtering rather than silently deleting the row.
-  //    d) Delete stale rows — anything in raw_places for this area that is no longer
-  //       returned by Google at all this run (not in kept OR newly-tagged excluded sets).
+  // 6. Sync to database
+  //    a) Monitoring refresh for recovered places (were excluded, now operational again).
+  //       Existing places already handled by step 1 are intentionally skipped here.
+  //    b) Full insert for genuinely new places.
+  //    c) Tag places from Nearby Search that fail filters but exist in DB (belt+suspenders
+  //       for anything step 1 may have missed, e.g. a search-only status signal).
+  //    d) Delete stale rows — rows in raw_places not touched by step 1 OR step 2/3/4 AND
+  //       not already tagged excluded. Never deletes status='excluded' rows.
   const totalExcluded = excluded.length + outOfBounds.length;
-  console.log(`\n[5/5] Syncing to database...`);
+  console.log(`\n[6/6] Syncing to database...`);
 
-  // 5a. Monitoring refresh for existing kept places
-  if (existingPlaces.length > 0) {
-    const monitoringRows = existingPlaces.map(placeToMonitoringUpdate);
-    for (let i = 0; i < monitoringRows.length; i += BATCH_SIZE) {
-      const batch = monitoringRows.slice(i, i + BATCH_SIZE);
+  // 6a. Monitoring refresh for recovered places (previously excluded, now pass filters)
+  if (recoveredPlaces.length > 0) {
+    const recoveryRows = recoveredPlaces.map(placeToMonitoringUpdate);
+    for (let i = 0; i < recoveryRows.length; i += BATCH_SIZE) {
+      const batch = recoveryRows.slice(i, i + BATCH_SIZE);
       const { error } = await supabase
         .from('raw_places')
         .upsert(batch, { onConflict: 'google_place_id' });
-      if (error) throw new Error(`Supabase monitoring upsert failed: ${error.message}`);
+      if (error) throw new Error(`Supabase recovery upsert failed: ${error.message}`);
     }
-    console.log(`  ✅ Refreshed monitoring fields for ${existingPlaces.length} existing place(s)`);
+    console.log(`  ♻️  Restored ${recoveredPlaces.length} previously-excluded place(s) to pending`);
   }
 
-  // 5b. Full insert for new kept places
+  // 6b. Full insert for genuinely new places
   if (newPlacesWithDetails.length > 0) {
     const newRows = newPlacesWithDetails.map((p) => placeToRow(p, areaKey));
     for (let i = 0; i < newRows.length; i += BATCH_SIZE) {
@@ -421,10 +564,10 @@ async function runArea(areaKey, supabase, rules, { skipEditorial = false } = {})
     console.log(`  ✅ Inserted ${newPlacesWithDetails.length} new place(s)`);
   }
 
-  // 5c. Tag existing places that now fail filters as 'excluded'
-  //     These were previously in raw_places but Google's current data (e.g., CLOSED_TEMPORARILY,
-  //     rating drop) means they no longer pass. We retain the row so there's an audit trail
-  //     and downstream pipelines can filter on status='excluded'.
+  // 6c. Tag existing places from Nearby Search that now fail filters (belt+suspenders)
+  const existingExcluded = excluded.filter(
+    (e) => existingIds.has(e.place.id) && !recheckResult.excludedIds.has(e.place.id)
+  );
   if (existingExcluded.length > 0) {
     const exclusionRows = existingExcluded.map(({ place, reason }) =>
       placeToExclusionUpdate(place, reason)
@@ -434,20 +577,18 @@ async function runArea(areaKey, supabase, rules, { skipEditorial = false } = {})
       const { error } = await supabase
         .from('raw_places')
         .upsert(batch, { onConflict: 'google_place_id' });
-      if (error) throw new Error(`Supabase exclusion tag upsert failed: ${error.message}`);
+      if (error) throw new Error(`Supabase search-exclusion tag upsert failed: ${error.message}`);
     }
-    const byReason = {};
-    for (const { reason, detail } of existingExcluded) {
-      byReason[reason] = (byReason[reason] ?? 0) + 1;
-      if (detail) console.log(`     · ${reason}: ${detail}`);
-    }
-    console.log(`  🚫 Tagged ${existingExcluded.length} existing place(s) as excluded`);
+    console.log(`  🚫 Tagged ${existingExcluded.length} additional place(s) as excluded (from search)`);
   }
 
-  // 5d. Delete stale rows — places in raw_places for this area that were NOT returned
-  //     by Google this run at all (not in kept set AND not in newly-tagged excluded set).
-  //     Places that Google still returns but we excluded above are retained (step 5c).
+  // 6d. Delete stale rows — rows for this area that were NOT touched by:
+  //     step 1 (recheck), step 2 search (clipped or nearby-excluded), or already excluded.
+  //     status='excluded' rows are explicitly protected from deletion so the audit trail
+  //     is preserved across runs. Only rows with no Google signal at all get removed.
   const activeIds = new Set([
+    ...recheckResult.refreshedIds,
+    ...recheckResult.excludedIds,
     ...clippedIds,
     ...existingExcluded.map((e) => e.place.id),
   ]);
@@ -455,7 +596,8 @@ async function runArea(areaKey, supabase, rules, { skipEditorial = false } = {})
     const { data: allAreaRows, error: fetchErr } = await supabase
       .from('raw_places')
       .select('google_place_id')
-      .eq('search_area', areaKey);
+      .eq('search_area', areaKey)
+      .neq('status', 'excluded');  // never delete rows already tagged excluded
     if (fetchErr) throw new Error(`Failed to fetch area rows for stale check: ${fetchErr.message}`);
 
     const staleIds = (allAreaRows ?? [])
@@ -471,12 +613,17 @@ async function runArea(areaKey, supabase, rules, { skipEditorial = false } = {})
           .in('google_place_id', batch);
         if (error) throw new Error(`Supabase stale delete failed: ${error.message}`);
       }
-      console.log(`  🗑  Removed ${staleIds.length} stale row(s) no longer returned by Google`);
+      console.log(`  🗑  Removed ${staleIds.length} stale row(s) no longer found in Google`);
     }
   }
 
-  console.log(`\n  ✅ Done — ${clipped.length} active (${existingPlaces.length} refreshed, ${newPlacesWithDetails.length} new), ${existingExcluded.length} tagged excluded, ${totalExcluded - existingExcluded.length} filtered before DB\n`);
-  return { areaKey, active: clipped.length, newCount: newPlacesWithDetails.length, excluded: totalExcluded };
+  const recheckExcludedCount = recheckResult.excludedIds.size;
+  console.log(
+    `\n  ✅ Done — ${recheckResult.refreshedIds.size} rechecked OK, ` +
+    `${newPlacesWithDetails.length} new, ${recoveredPlaces.length} recovered, ` +
+    `${recheckExcludedCount + existingExcluded.length} excluded this run\n`
+  );
+  return { areaKey, active: recheckResult.refreshedIds.size + newPlacesWithDetails.length, newCount: newPlacesWithDetails.length, excluded: totalExcluded };
 }
 
 // ── Main ──────────────────────────────────────────────────
