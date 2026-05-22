@@ -616,6 +616,24 @@ async function insertApprovedCandidates(supabase, candidates, classifications, d
 }
 
 // ─────────────────────────────────────────────────────────
+// Approval summary (helpful for auditing borderline inclusions)
+// ─────────────────────────────────────────────────────────
+function printApprovalSummary(candidates, classifications) {
+  const approved = classifications.filter(c => c.relevant);
+  if (approved.length === 0) return;
+
+  const candidateMap = new Map(candidates.map(c => [c.google_place_id, c]));
+  console.log(`\n${'─'.repeat(56)}`);
+  console.log(`  Approved candidates (${approved.length})`);
+  console.log(`${'─'.repeat(56)}`);
+  for (const cls of approved) {
+    const raw = candidateMap.get(cls.google_place_id);
+    console.log(`  · ${raw?.name ?? cls.google_place_id}`);
+    console.log(`    Reason: ${cls.reason}`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────
 // Exclusion summary (helpful for reviewing what was filtered)
 // ─────────────────────────────────────────────────────────
 function printExclusionSummary(candidates, classifications) {
@@ -717,7 +735,8 @@ async function run() {
   console.log(`  Total in filtered_places:     ${existingCount + newCount}`);
   console.log(`${'═'.repeat(56)}\n`);
 
-  // Print exclusion list for review
+  // Print approval + exclusion review summaries
+  printApprovalSummary(candidates, classifications);
   printExclusionSummary(candidates, classifications);
 }
 
