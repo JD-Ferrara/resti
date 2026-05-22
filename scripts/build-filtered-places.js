@@ -158,6 +158,88 @@ async function fetchAllowlist(supabase) {
   return data ?? [];
 }
 
+// ── Exclusion rules ───────────────────────────────────────
+// Operational exclusion rules (which chains, Google types, and quality thresholds
+// to filter) are stored in Supabase so they can be updated without redeploying.
+// Editorial reasoning (destination-worthiness, geography nuance, etc.) remains
+// hardcoded in CLASSIFICATION_SYSTEM_PROMPT above.
+async function fetchExclusionRules(supabase) {
+  const { data, error } = await supabase
+    .from('place_exclusion_rules')
+    .select('*')
+    .eq('is_active', true);
+  if (error) throw new Error(`Failed to fetch place_exclusion_rules: ${error.message}`);
+  return data ?? [];
+}
+
+// Build a prompt section from DB-sourced exclusion rules, appended below the
+// hardcoded editorial system prompt at runtime. Grouping by rule_type keeps the
+// output readable and mirrors how a human reviewer would think about each category.
+function buildDynamicRulePrompt(rules) {
+  if (rules.length === 0) return '';
+
+  const byType = {};
+  for (const rule of rules) {
+    (byType[rule.rule_type] ??= []).push(rule);
+  }
+
+  const sections = [];
+
+  if (byType.chain_name?.length) {
+    const names = byType.chain_name.map(r => r.value).sort();
+    sections.push(
+      '━━━ EXCLUDED CHAINS (authoritative — DB-sourced) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n' +
+      'If a candidate\'s name matches any entry below exactly, classify it as not relevant\n' +
+      'regardless of other signals:\n' +
+      names.map(n => `• ${n}`).join('\n')
+    );
+  }
+
+  if (byType.google_type_exclude?.length) {
+    const types = byType.google_type_exclude.map(r => r.value).sort();
+    sections.push(
+      '━━━ EXCLUDED GOOGLE TYPES (authoritative — DB-sourced) ━━━━━━━━━━━━━━━━━━━━━━━━\n' +
+      'Exclude candidates whose Google Types include any of the following:\n' +
+      types.map(t => `• ${t}`).join('\n')
+    );
+  }
+
+  if (byType.business_status?.length) {
+    const statuses = byType.business_status.map(r => r.value).sort();
+    sections.push(
+      '━━━ EXCLUDED BUSINESS STATUSES (authoritative — DB-sourced) ━━━━━━━━━━━━━━━━━━━\n' +
+      'Exclude any candidate whose business_status matches one of the following:\n' +
+      statuses.map(s => `• ${s}`).join('\n')
+    );
+  }
+
+  const minRatingRule  = byType.min_rating?.[0];
+  const minReviewsRule = byType.min_reviews?.[0];
+  if (minRatingRule || minReviewsRule) {
+    const lines = ['━━━ QUALITY THRESHOLDS (authoritative — DB-sourced) ━━━━━━━━━━━━━━━━━━━━━━━━━━'];
+    if (minRatingRule) {
+      lines.push(`• Minimum rating: ${minRatingRule.value} — exclude candidates rated below this.`);
+    }
+    if (minReviewsRule) {
+      lines.push(
+        `• Minimum reviews: ${minReviewsRule.value} — exclude candidates with fewer reviews than this.`,
+        '  Exception: see NEW OPENINGS guidance above — low counts may indicate a recent opening.'
+      );
+    }
+    sections.push(lines.join('\n'));
+  }
+
+  if (sections.length === 0) return '';
+
+  return (
+    '\n\n━━━ OPERATIONAL EXCLUSION RULES (loaded from database at runtime) ━━━━━━━━━━━━━━\n' +
+    'The rules below are authoritative and sourced from the operational database.\n' +
+    'They supplement the editorial guidance above and take precedence for the specific\n' +
+    'cases they cover (exact chain names, Google types, status flags, and thresholds).\n\n' +
+    sections.join('\n\n')
+  );
+}
+
 // ── Supabase client ───────────────────────────────────────
 function getSupabase() {
   const url = process.env.VITE_SUPABASE_URL;
@@ -356,7 +438,7 @@ async function getCandidates(supabase, areaFilter) {
  * Classify a single batch of candidates via Claude.
  * Returns an array of { google_place_id, relevant, reason }.
  */
-async function classifyBatch(anthropic, batch, batchLabel) {
+async function classifyBatch(anthropic, batch, batchLabel, systemPrompt) {
   const candidateList = batch
     .map((p, idx) => {
       const types = Array.isArray(p.google_types)
@@ -384,7 +466,7 @@ async function classifyBatch(anthropic, batch, batchLabel) {
     response = await anthropic.messages.create({
       model: 'claude-sonnet-4-6',
       max_tokens: 4096,
-      system: CLASSIFICATION_SYSTEM_PROMPT,
+      system: systemPrompt,
       messages: [{ role: 'user', content: userMessage }],
       tools: [CLASSIFICATION_TOOL],
       tool_choice: { type: 'tool', name: 'classify_restaurants' },
@@ -424,7 +506,7 @@ async function classifyBatch(anthropic, batch, batchLabel) {
 /**
  * Classify all candidates in batches. Returns a flat array of classifications.
  */
-async function classifyCandidates(anthropic, candidates) {
+async function classifyCandidates(anthropic, candidates, systemPrompt) {
   const totalBatches = Math.ceil(candidates.length / AI_BATCH_SIZE);
   console.log(
     `[4/5] AI classifying ${candidates.length} candidates ` +
@@ -442,7 +524,7 @@ async function classifyCandidates(anthropic, candidates) {
 
     process.stdout.write(`  ${batchLabel} (${batch.length} candidates)... `);
 
-    const classifications = await classifyBatch(anthropic, batch, batchLabel);
+    const classifications = await classifyBatch(anthropic, batch, batchLabel, systemPrompt);
     allClassifications.push(...classifications);
 
     const approved = classifications.filter(c => c.relevant).length;
@@ -566,6 +648,17 @@ async function run() {
   const supabase  = getSupabase();
   const anthropic = getAnthropic();
 
+  // ── Build runtime system prompt ───────────────────────
+  // Editorial philosophy (destination-worthiness, geography nuance, etc.) is
+  // hardcoded in CLASSIFICATION_SYSTEM_PROMPT and never changes at runtime.
+  // Operational rules (chain lists, type exclusions, thresholds) are DB-sourced
+  // so they can be updated in Supabase without redeploying this script.
+  const exclusionRules    = await fetchExclusionRules(supabase);
+  const dynamicRulePrompt = buildDynamicRulePrompt(exclusionRules);
+  const finalSystemPrompt = `${CLASSIFICATION_SYSTEM_PROMPT}${dynamicRulePrompt}`;
+
+  console.log(`  Loaded ${exclusionRules.length} active exclusion rules from DB.\n`);
+
   // ── Step 1: Truncate ──────────────────────────────────
   await truncateFilteredPlaces(supabase, dryRun);
 
@@ -603,7 +696,7 @@ async function run() {
 
   // ── Step 4: AI classification ─────────────────────────
   const aiClassifications = toClassify.length > 0
-    ? await classifyCandidates(anthropic, toClassify)
+    ? await classifyCandidates(anthropic, toClassify, finalSystemPrompt)
     : [];
 
   const classifications = [...allowlistClassifications, ...aiClassifications];
