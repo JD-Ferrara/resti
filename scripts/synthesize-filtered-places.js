@@ -151,15 +151,16 @@ rating, review count, and your own knowledge of the NYC dining scene.
     "Le Bernardin Restaurant"                         → "Le Bernardin"
 
 ━━━ 2. CUISINE TAXONOMY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Use 1–3 words. Prefer the established labels below; extend conservatively only if nothing fits.
+Use 1–3 words. Labels must be immediately recognizable to a general audience
+without any culinary insider knowledge. If a label requires a dictionary, it fails.
 
-Approved labels (use these first):
+APPROVED LABELS — use these first:
   Modern American, Contemporary American, New American, American Bar & Grill,
-  Italian, Modern Italian, Italian Osteria, Italian Market,
+  Italian, Modern Italian, Traditional Italian,
   Japanese, Modern Japanese, Omakase, Ramen,
   French, French Brasserie, Modern French,
   Greek, Coastal Greek, Greek Seafood,
-  Spanish, Spanish Tapas, Spanish Market,
+  Spanish, Spanish Tapas,
   Mexican, Upscale Mexican, Contemporary Mexican, Plant-Based Mexican,
   Mediterranean, Eastern Mediterranean, Coastal Mediterranean,
   Steakhouse, Modern Steakhouse, Chophouse,
@@ -169,26 +170,40 @@ Approved labels (use these first):
   Indian, Modern Indian,
   Thai, Vietnamese, Peruvian, Argentinian,
   Pizza, Neapolitan Pizza,
-  Sushi, Izakaya, Nikkei Izakaya,
+  Sushi, Izakaya, Nikkei,
   Middle Eastern, Israeli, Lebanese,
   Wine Bar, Natural Wine Bar,
   Cocktail Bar, Gastropub,
-  Jewish Deli, Bagels & Appetizing,
+  New York Deli, Jewish Deli,
   Fast Casual, Farm-to-Table, All-Day Café,
-  Food Hall, Market Hall
+  Food Hall
 
-If none fit, coin a label using the same [Style] [Primary] format and flag it
-in the notes field with "[NEW CUISINE LABEL]" at the end.
+REMOVAL — these labels were in a prior list and must NOT be used:
+  "Bagels & Appetizing" → use "New York Deli" or "Jewish Deli"
+  "Italian Osteria"     → use "Traditional Italian" or "Modern Italian"
+  "Italian Market"      → use "Food Hall" or "Italian"
+  "Market Hall"         → use "Food Hall"
+  "Spanish Market"      → use "Food Hall" or "Spanish"
+  "Nikkei Izakaya"      → use "Nikkei" or "Japanese"
+
+If none of the approved labels fit, coin one using [Style] [Primary Cuisine] format.
+The result must pass the "would a non-foodie understand this?" test.
+Flag it in the notes field with "[NEW CUISINE LABEL]" at the end.
 
 ━━━ 0. IDENTITY RULE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 The address field is the definitive identifier for which restaurant this is.
 Multiple places may share a building or a similar name. The address — especially
 the floor number — tells you which venue you are actually describing.
   "101st Floor, 30 Hudson Yards" = Peak (sky views, destination dining)
-  "5th Floor, 30 Hudson Yards"   = Quin Bar (hotel bar, no panoramic views)
-If the address contradicts the name provided or any notes you would naturally write,
-trust the address. Never describe views, a floor, or a physical feature that does
-not match the address's actual location.
+  "5th Floor, 30 Hudson Yards"   = a separate bar/lounge — lower floor, no panoramic views
+
+NEVER infer a venue type from the building it shares with others. A bar inside a
+building that also contains a hotel is NOT automatically a hotel bar. A restaurant
+inside a mall is NOT automatically casual. Only use facts specific to the venue itself.
+
+If the address contradicts what you'd naturally write about the name, trust the address.
+Never describe views, a floor experience, or a physical feature that doesn't match
+the address's actual location.
 
 ━━━ 3. NOTES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Voice: conversational, insider, direct. NOT marketing copy.
@@ -237,6 +252,10 @@ of the restaurant over the provided price signal, especially for well-known spot
 ━━━ 5. TAGS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Select only tags that are GENUINELY true for this restaurant. Don't pad.
 Output only the true ones — false tags are omitted (they default to false).
+
+If sibling_venues data is provided, the listed venues share the same physical address.
+Consider their combined menu and drinks offering when assigning dietary and drinks tags —
+a mocktail program or vegetarian section at one sibling is often available at the other.
 
 Tag definitions:
 
@@ -373,6 +392,28 @@ async function fetchRows() {
     console.log(`   Menu snippets found: ${found}/${enriched.length}\n`);
   }
 
+  // Detect sibling venues sharing the same address (e.g. Greywind + Spygold).
+  // Each sibling gets a cross-reference so Claude can consider shared menu context.
+  const addressGroups = {};
+  for (const row of enriched) {
+    const key = (row.address ?? '').trim().toLowerCase();
+    if (!key) continue;
+    if (!addressGroups[key]) addressGroups[key] = [];
+    addressGroups[key].push(row);
+  }
+  for (const siblings of Object.values(addressGroups)) {
+    if (siblings.length < 2) continue;
+    for (const row of siblings) {
+      const others = siblings.filter(s => s.google_places_id !== row.google_places_id);
+      row.sibling_context = others.map(s => {
+        const parts = [`name: ${s.name}`];
+        if (s.cuisine) parts.push(`cuisine: ${s.cuisine}`);
+        if (s.menu_snippet) parts.push(`menu_snippet: ${s.menu_snippet}`);
+        return parts.join(', ');
+      }).join(' | ');
+    }
+  }
+
   return enriched;
 }
 
@@ -435,6 +476,7 @@ function formatRow(row) {
   if (row.google_review_count) lines.push(`google_review_count: ${row.google_review_count}`);
   if (row.existing_notes)      lines.push(`existing_notes (review for accuracy): ${row.existing_notes}`);
   if (row.menu_snippet)        lines.push(`menu_snippets (use for dietary/mocktail tags): ${row.menu_snippet}`);
+  if (row.sibling_context)     lines.push(`sibling_venues (same address — consider shared menu/tag context): ${row.sibling_context}`);
   return lines.join('\n');
 }
 
