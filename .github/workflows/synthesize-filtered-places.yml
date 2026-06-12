@@ -17,9 +17,14 @@ on:
         type: choice
         default: incremental
         options:
-          - incremental   # pending rows only (default)
-          - force         # re-synthesize all rows
-          - dry-run       # preview output, no DB writes
+          - incremental           # pending rows only (default)
+          - force                 # re-synthesize all rows
+          - dry-run               # preview output, no DB writes
+
+      enrich_menus:
+        description: 'Fetch menu/drinks content via Tavily for better dietary + mocktail tag accuracy'
+        type: boolean
+        default: false
 
       google_places_id:
         description: 'Single restaurant (google_places_id) — leave blank for batch'
@@ -51,10 +56,12 @@ jobs:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
         run: |
           echo "VITE_SUPABASE_URL=$VITE_SUPABASE_URL" >> .env
           echo "SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY" >> .env
           echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" >> .env
+          echo "TAVILY_API_KEY=$TAVILY_API_KEY" >> .env
 
       - name: Build args
         id: args
@@ -67,6 +74,9 @@ jobs:
           esac
           if [ -n "${{ github.event.inputs.google_places_id }}" ]; then
             ARGS="$ARGS --id ${{ github.event.inputs.google_places_id }}"
+          fi
+          if [ "${{ github.event.inputs.enrich_menus }}" = "true" ]; then
+            ARGS="$ARGS --enrich-menus"
           fi
           echo "flags=$ARGS" >> $GITHUB_OUTPUT
 
