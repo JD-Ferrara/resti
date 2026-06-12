@@ -20,6 +20,7 @@
 //   node scripts/synthesize-filtered-places.js --force        (re-synthesize all)
 //   node scripts/synthesize-filtered-places.js --dry-run      (preview, no DB writes)
 //   node scripts/synthesize-filtered-places.js --id ChIJ...  (single place by google_places_id)
+//   node scripts/synthesize-filtered-places.js --enrich-menus (Tavily menu lookup per restaurant)
 
 import 'dotenv/config';
 import { createClient } from '@supabase/supabase-js';
@@ -32,16 +33,18 @@ const DB_BATCH_SIZE = 50;   // rows per Supabase upsert
 // ── Args ──────────────────────────────────────────────────
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes('--dry-run');
-const FORCE   = args.includes('--force');
-const ID_IDX  = args.indexOf('--id');
-const SINGLE_ID = ID_IDX !== -1 ? args[ID_IDX + 1] : null;
+const FORCE         = args.includes('--force');
+const ENRICH_MENUS  = args.includes('--enrich-menus');
+const ID_IDX        = args.indexOf('--id');
+const SINGLE_ID     = ID_IDX !== -1 ? args[ID_IDX + 1] : null;
 
 // ── Clients ───────────────────────────────────────────────
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const anthropic   = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const TAVILY_KEY  = process.env.TAVILY_API_KEY;
 
 // ── All 44 tag column names (mirrors restaurant_tags schema) ─
 const ALL_TAGS = [
@@ -177,17 +180,46 @@ Approved labels (use these first):
 If none fit, coin a label using the same [Style] [Primary] format and flag it
 in the notes field with "[NEW CUISINE LABEL]" at the end.
 
+━━━ 0. IDENTITY RULE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+The address field is the definitive identifier for which restaurant this is.
+Multiple places may share a building or a similar name. The address — especially
+the floor number — tells you which venue you are actually describing.
+  "101st Floor, 30 Hudson Yards" = Peak (sky views, destination dining)
+  "5th Floor, 30 Hudson Yards"   = Quin Bar (hotel bar, no panoramic views)
+If the address contradicts the name provided or any notes you would naturally write,
+trust the address. Never describe views, a floor, or a physical feature that does
+not match the address's actual location.
+
 ━━━ 3. NOTES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Voice: conversational, insider, direct. NOT marketing copy.
 Length: 100–250 characters (tight — every word earns its place).
 Content: what makes it worth going, who it's for, the standout thing (dish, vibe, chef, view).
 
-✓ Good: "Dan Kluger's gem. Greywind upstairs, Spygold cocktail bar below. Most neighborhood-feeling spot here."
-✓ Good: "Michelin recognized. Chef Hillary Sterling. Caramelized onion torta alone is worth the trip."
-✗ Bad: "A beloved neighborhood restaurant offering seasonal New American cuisine in a warm, inviting atmosphere."
+GOOD examples:
+  "Dan Kluger's gem. Greywind upstairs, Spygold cocktail bar below. Most neighborhood-feeling spot here."
+  "Michelin recognized. Chef Hillary Sterling. Caramelized onion torta alone is worth the trip."
+BAD example:
+  "A beloved neighborhood restaurant offering seasonal New American cuisine in a warm, inviting atmosphere."
 
-Avoid: "is known for", "boasts", "offers", "features", "beloved", "vibrant", "exciting".
-Time-sensitive claims: do NOT say "newly opened", "just launched", or similar — these age badly.
+FORMATTING
+• No em dashes (use a period or comma instead).
+• No en dashes used as separators.
+
+TONE — these rules are strict. Violations will be rejected.
+• Describe each place on its own merits. No comparisons that imply another place is better.
+• No qualifiers that subtly diminish: "not a destination but...", "reliably good",
+  "won't blow your mind", "does the job", "nothing groundbreaking".
+• No irony or backhanded framing: "a crowd that actually seems happy here",
+  "feels like it belongs somewhere with more character".
+• No geographic snobbery or implications that any neighborhood is lesser than another.
+• Casual, unpretentious, and neighborhood spots deserve the same honest positivity as
+  fine dining. "Best quick lunch in the neighborhood" is a compliment, not a consolation.
+• No inflation either — do not oversell or use adjectives that aren't earned.
+
+Word ban: "boasts", "features", "vibrant", "exciting", "beloved", "is known for",
+"offers", "provides", "nestled", "tucked", "haven", "gem" (overused).
+
+Time-sensitive claims: do NOT say "newly opened", "just launched", or similar.
 If an existing notes value is provided and still accurate, you may reuse or lightly refresh it.
 Prefer editorial_summary as a starting signal, then your own knowledge of the restaurant.
 
@@ -236,9 +268,12 @@ DRINKS
   great_beer_selection  — rotating taps, craft cans, notable beer list
   standard_bar          — basic but functional bar — house wine, beer, well spirits
   destination_bar       — bar alone is a reason to go
-  mocktail_program      — dedicated, curated zero-proof or mocktail menu; not just "we can skip
-                          the alcohol" — the non-alcoholic drinks are a real program with intention
-                          and craft (think: a separate NA menu, house-made shrubs, zero-proof pairings)
+  mocktail_program      — a dedicated, curated zero-proof drinks section on the menu. Tag it when
+                          the restaurant has clearly invested in non-alcoholic options as a real
+                          program: a named section (e.g. "Placebos", "Non-Alcoholic", "Zero-Proof"),
+                          house-made NA cocktails, or zero-proof pairings — not just "no alcohol on
+                          request" or a single mocktail listed as an afterthought. If menu_snippets
+                          are provided, look for section headers, asterisks, or dedicated NA items.
 
 FOOD
   sharing_plates        — designed for sharing, small plates or family style
@@ -254,10 +289,16 @@ GROUP
   family_friendly       — welcoming to families, kids not out of place
   watch_games_with_friends — TVs, casual, good for sports watching
 
-DIETARY
-  vegan                 — full vegan menu or vegan-first concept
-  vegetarian_friendly   — solid vegetarian options beyond one sad pasta
-  gluten_free_friendly  — accommodates gluten-free without much effort
+DIETARY — same evidence standard as mocktail_program
+  These tags require genuine investment from the restaurant, not a token option.
+  Tag only when the restaurant has a dedicated section, a meaningfully sized selection,
+  or is explicitly known for it. "We can make the steak without butter" does not qualify.
+  If menu_snippets are provided, look for dedicated sections, symbols (V, VG, GF), or
+  a significant proportion of clearly marked items.
+
+  vegan                 — full vegan menu or vegan-first concept (majority of menu is vegan)
+  vegetarian_friendly   — a substantial, deliberately crafted vegetarian selection, not just sides
+  gluten_free_friendly  — clearly marked GF options and kitchen awareness, not an afterthought
 
 VALUE
   worth_the_splurge     — expensive but earns it — you leave feeling it was worth it
@@ -313,13 +354,66 @@ async function fetchRows() {
 
   const restMap = Object.fromEntries((restRows || []).map(r => [r.google_place_id, r]));
 
-  return fpRows.map(fp => ({
+  const enriched = fpRows.map(fp => ({
     ...fp,
     google_rating:       rpMap[fp.google_places_id]?.google_rating ?? null,
     google_review_count: rpMap[fp.google_places_id]?.google_review_count ?? null,
     price_range:         rpMap[fp.google_places_id]?.price_range ?? null,
     existing_notes:      restMap[fp.google_places_id]?.notes ?? null,
+    menu_snippet:        null,
   }));
+
+  if (ENRICH_MENUS) {
+    console.log(`🔍 Fetching menu snippets via Tavily for ${enriched.length} restaurants…`);
+    for (const row of enriched) {
+      row.menu_snippet = await fetchMenuSnippet(row);
+      await new Promise(r => setTimeout(r, 600)); // rate limit: ~100 req/min
+    }
+    const found = enriched.filter(r => r.menu_snippet).length;
+    console.log(`   Menu snippets found: ${found}/${enriched.length}\n`);
+  }
+
+  return enriched;
+}
+
+// ── Tavily menu search ────────────────────────────────────
+// Searches for the restaurant's menu/drinks page and returns
+// up to ~800 chars of the most relevant content as a snippet.
+// Only called when --enrich-menus flag is set.
+async function fetchMenuSnippet(row) {
+  if (!TAVILY_KEY) {
+    console.warn('⚠️  TAVILY_API_KEY not set — skipping menu enrichment');
+    return null;
+  }
+  try {
+    const query = `${row.name} ${row.district ?? ''} menu drinks cocktails mocktail vegetarian gluten free`;
+    const resp = await fetch('https://api.tavily.com/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        api_key: TAVILY_KEY,
+        query,
+        search_depth: 'advanced',
+        max_results: 5,
+        include_domains: row.website ? [new URL(row.website).hostname] : [],
+      }),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+
+    // Concatenate up to 800 chars from results most likely to be menu pages
+    const snippet = (data.results || [])
+      .filter(r => /menu|drink|cocktail|food|wine/i.test(r.url + ' ' + r.title))
+      .slice(0, 3)
+      .map(r => r.content || '')
+      .join(' ')
+      .slice(0, 800)
+      .trim();
+
+    return snippet || null;
+  } catch {
+    return null;
+  }
 }
 
 // ── Format one row into the Claude input string ───────────
@@ -340,6 +434,7 @@ function formatRow(row) {
   if (row.google_rating)       lines.push(`google_rating: ${row.google_rating}`);
   if (row.google_review_count) lines.push(`google_review_count: ${row.google_review_count}`);
   if (row.existing_notes)      lines.push(`existing_notes (review for accuracy): ${row.existing_notes}`);
+  if (row.menu_snippet)        lines.push(`menu_snippets (use for dietary/mocktail tags): ${row.menu_snippet}`);
   return lines.join('\n');
 }
 
