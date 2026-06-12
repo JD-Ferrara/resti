@@ -110,11 +110,19 @@ const SYNTHESIS_TOOL = {
             proposed_tags: {
               type: 'object',
               description:
-                'Only include tags that are genuinely true. Omit false ones.',
+                'Only include tags that are genuinely true for THIS venue specifically. Omit false ones.',
               properties: Object.fromEntries(
                 ALL_TAGS.map(t => [t, { type: 'boolean' }])
               ),
               additionalProperties: false,
+            },
+            parent_concept: {
+              type: 'string',
+              description:
+                'If this venue is a sibling/sub-concept of another venue at the same address, ' +
+                'provide the google_places_id of the primary/parent venue. Omit or set null if ' +
+                'this is the primary venue or has no sibling relationship.',
+              nullable: true,
             },
           },
           required: ['google_places_id', 'cleaned_name', 'cuisine', 'notes', 'price', 'proposed_tags'],
@@ -205,6 +213,22 @@ If the address contradicts what you'd naturally write about the name, trust the 
 Never describe views, a floor experience, or a physical feature that doesn't match
 the address's actual location.
 
+━━━ 0b. PARENT CONCEPT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+When sibling_venues data is provided, use your judgment to determine whether any
+of those venues are sub-concepts or companion spaces of this one, or vice versa.
+
+A "sibling" relationship exists when venues are meaningfully connected — they share
+ownership, branding, a physical space, or serve as clear complements to each other
+(e.g. a cocktail bar that functions as the pre-drink or feeder space for an upstairs
+dining room, a café that lives within a larger restaurant, a lounge attached to a
+destination dining experience). The relationship doesn't have to be explicit — use
+reasoning about what makes most sense given the names, floor levels, and venue types.
+
+Set parent_concept to the google_places_id of whichever venue is the primary concept.
+The primary is typically the dining room, the more well-known brand, or the main draw.
+The sibling is typically the bar, lounge, café, or companion space.
+Only set parent_concept on the sibling — the parent leaves it null.
+
 ━━━ 3. NOTES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Voice: conversational, insider, direct. NOT marketing copy.
 Length: 100–250 characters (tight — every word earns its place).
@@ -254,8 +278,10 @@ Select only tags that are GENUINELY true for this restaurant. Don't pad.
 Output only the true ones — false tags are omitted (they default to false).
 
 If sibling_venues data is provided, the listed venues share the same physical address.
-Consider their combined menu and drinks offering when assigning dietary and drinks tags —
-a mocktail program or vegetarian section at one sibling is often available at the other.
+This context is for IDENTITY clarity and parent_concept assignment only.
+Tags are ALWAYS assessed independently per venue — Spygold and Greywind serve
+different occasions and vibes and must be tagged on their own merits. Do not
+copy or inherit tags from a sibling. Evaluate each venue as a standalone experience.
 
 Tag definitions:
 
@@ -514,6 +540,7 @@ async function writeResults(results) {
         notes:            r.notes,
         price:            r.price,
         proposed_tags:    r.proposed_tags,
+        parent_concept:   r.parent_concept ?? null,
         synthesis_status: 'complete',
       })
       .eq('google_places_id', r.google_places_id);
