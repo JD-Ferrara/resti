@@ -54,7 +54,7 @@ const ALL_TAGS = [
   'old_school_classic', 'hidden_gem', 'cozy', 'grand_impressive',
   // Drinks
   'craft_cocktails', 'extensive_wine_list', 'natural_wine',
-  'great_beer_selection', 'standard_bar', 'destination_bar',
+  'great_beer_selection', 'standard_bar', 'destination_bar', 'mocktail_program',
   // Food
   'sharing_plates', 'tasting_menu', 'traditional_entrees',
   'bar_snacks_only', 'chef_driven',
@@ -236,6 +236,9 @@ DRINKS
   great_beer_selection  — rotating taps, craft cans, notable beer list
   standard_bar          — basic but functional bar — house wine, beer, well spirits
   destination_bar       — bar alone is a reason to go
+  mocktail_program      — dedicated, curated zero-proof or mocktail menu; not just "we can skip
+                          the alcohol" — the non-alcoholic drinks are a real program with intention
+                          and craft (think: a separate NA menu, house-made shrubs, zero-proof pairings)
 
 FOOD
   sharing_plates        — designed for sharing, small plates or family style
@@ -268,17 +271,26 @@ VALUE
 // ── Fetch rows to process ─────────────────────────────────
 async function fetchRows() {
   // Start with filtered_places
-  let query = supabase
-    .from('filtered_places')
-    .select('*');
+  const buildQuery = (withStatusFilter) => {
+    let q = supabase.from('filtered_places').select('*');
+    if (SINGLE_ID) {
+      q = q.eq('google_places_id', SINGLE_ID);
+    } else if (!FORCE && withStatusFilter) {
+      q = q.eq('synthesis_status', 'pending');
+    }
+    return q;
+  };
 
-  if (SINGLE_ID) {
-    query = query.eq('google_places_id', SINGLE_ID);
-  } else if (!FORCE) {
-    query = query.eq('synthesis_status', 'pending');
+  let { data: fpRows, error: fpErr } = await buildQuery(true);
+
+  // synthesis_status column won't exist until the migration is run.
+  // Fall back to fetching all rows so the script still works pre-migration.
+  if (fpErr && fpErr.message.includes('synthesis_status')) {
+    console.warn('⚠️  synthesis_status column not found — run supabase-add-synthesis-columns.sql.');
+    console.warn('   Fetching all rows and treating them as pending.\n');
+    ({ data: fpRows, error: fpErr } = await buildQuery(false));
   }
 
-  const { data: fpRows, error: fpErr } = await query;
   if (fpErr) throw new Error(`filtered_places fetch: ${fpErr.message}`);
   if (!fpRows?.length) return [];
 

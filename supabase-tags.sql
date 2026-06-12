@@ -49,6 +49,7 @@ CREATE TABLE restaurant_tags (
   great_beer_selection      BOOLEAN NOT NULL DEFAULT FALSE,
   standard_bar              BOOLEAN NOT NULL DEFAULT FALSE,
   destination_bar           BOOLEAN NOT NULL DEFAULT FALSE,
+  mocktail_program          BOOLEAN NOT NULL DEFAULT FALSE,
 
   -- ── Food ──
   sharing_plates            BOOLEAN NOT NULL DEFAULT FALSE,
