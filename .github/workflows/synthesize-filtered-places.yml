@@ -1,0 +1,74 @@
+name: "Step 5: Synthesize Filtered Places"
+# Uses Claude AI to synthesize five fields for every row in
+# filtered_places: cleaned name, cuisine label, editorial notes,
+# validated price tier, and proposed tags (stored as JSONB until
+# Step 6 promotes rows to the restaurants + restaurant_tags tables).
+#
+# Prerequisites:
+#   Run supabase-add-synthesis-columns.sql in Supabase SQL Editor
+#   before triggering this workflow for the first time.
+
+on:
+  workflow_dispatch:
+    inputs:
+
+      mode:
+        description: 'Run mode'
+        type: choice
+        default: incremental
+        options:
+          - incremental   # pending rows only (default)
+          - force         # re-synthesize all rows
+          - dry-run       # preview output, no DB writes
+
+      google_places_id:
+        description: 'Single restaurant (google_places_id) — leave blank for batch'
+        type: string
+        default: ''
+
+jobs:
+  synthesize:
+    name: AI Synthesize → filtered_places
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Write .env
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          echo "VITE_SUPABASE_URL=$VITE_SUPABASE_URL" >> .env
+          echo "SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY" >> .env
+          echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" >> .env
+
+      - name: Build args
+        id: args
+        run: |
+          ARGS=""
+          case "${{ github.event.inputs.mode }}" in
+            force)     ARGS="--force" ;;
+            dry-run)   ARGS="--dry-run" ;;
+            *)         ARGS="" ;;   # incremental is the default
+          esac
+          if [ -n "${{ github.event.inputs.google_places_id }}" ]; then
+            ARGS="$ARGS --id ${{ github.event.inputs.google_places_id }}"
+          fi
+          echo "flags=$ARGS" >> $GITHUB_OUTPUT
+
+      - name: Synthesize filtered places
+        run: node scripts/synthesize-filtered-places.js ${{ steps.args.outputs.flags }}
