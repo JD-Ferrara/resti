@@ -268,17 +268,26 @@ VALUE
 // ── Fetch rows to process ─────────────────────────────────
 async function fetchRows() {
   // Start with filtered_places
-  let query = supabase
-    .from('filtered_places')
-    .select('*');
+  const buildQuery = (withStatusFilter) => {
+    let q = supabase.from('filtered_places').select('*');
+    if (SINGLE_ID) {
+      q = q.eq('google_places_id', SINGLE_ID);
+    } else if (!FORCE && withStatusFilter) {
+      q = q.eq('synthesis_status', 'pending');
+    }
+    return q;
+  };
 
-  if (SINGLE_ID) {
-    query = query.eq('google_places_id', SINGLE_ID);
-  } else if (!FORCE) {
-    query = query.eq('synthesis_status', 'pending');
+  let { data: fpRows, error: fpErr } = await buildQuery(true);
+
+  // synthesis_status column won't exist until the migration is run.
+  // Fall back to fetching all rows so the script still works pre-migration.
+  if (fpErr && fpErr.message.includes('synthesis_status')) {
+    console.warn('⚠️  synthesis_status column not found — run supabase-add-synthesis-columns.sql.');
+    console.warn('   Fetching all rows and treating them as pending.\n');
+    ({ data: fpRows, error: fpErr } = await buildQuery(false));
   }
 
-  const { data: fpRows, error: fpErr } = await query;
   if (fpErr) throw new Error(`filtered_places fetch: ${fpErr.message}`);
   if (!fpRows?.length) return [];
 
