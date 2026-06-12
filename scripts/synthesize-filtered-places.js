@@ -364,23 +364,23 @@ async function synthesizeBatch(batch) {
 }
 
 // ── Write results back to filtered_places ────────────────
+// Uses update (not upsert) so only the synthesized columns are
+// touched — avoids NOT NULL violations on columns like source_status
+// that aren't part of the synthesis payload.
 async function writeResults(results) {
-  const updates = results.map(r => ({
-    google_places_id: r.google_places_id,
-    name:             r.cleaned_name,
-    cuisine:          r.cuisine,
-    notes:            r.notes,
-    price:            r.price,
-    proposed_tags:    r.proposed_tags,
-    synthesis_status: 'complete',
-  }));
-
-  for (let i = 0; i < updates.length; i += DB_BATCH_SIZE) {
-    const chunk = updates.slice(i, i + DB_BATCH_SIZE);
+  for (const r of results) {
     const { error } = await supabase
       .from('filtered_places')
-      .upsert(chunk, { onConflict: 'google_places_id' });
-    if (error) throw new Error(`DB upsert failed: ${error.message}`);
+      .update({
+        name:             r.cleaned_name,
+        cuisine:          r.cuisine,
+        notes:            r.notes,
+        price:            r.price,
+        proposed_tags:    r.proposed_tags,
+        synthesis_status: 'complete',
+      })
+      .eq('google_places_id', r.google_places_id);
+    if (error) throw new Error(`DB update failed for ${r.google_places_id}: ${error.message}`);
   }
 }
 
