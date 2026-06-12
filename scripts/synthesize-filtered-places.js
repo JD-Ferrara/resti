@@ -54,7 +54,7 @@ const ALL_TAGS = [
   'old_school_classic', 'hidden_gem', 'cozy', 'grand_impressive',
   // Drinks
   'craft_cocktails', 'extensive_wine_list', 'natural_wine',
-  'great_beer_selection', 'standard_bar', 'destination_bar',
+  'great_beer_selection', 'standard_bar', 'destination_bar', 'mocktail_program',
   // Food
   'sharing_plates', 'tasting_menu', 'traditional_entrees',
   'bar_snacks_only', 'chef_driven',
@@ -236,6 +236,9 @@ DRINKS
   great_beer_selection  — rotating taps, craft cans, notable beer list
   standard_bar          — basic but functional bar — house wine, beer, well spirits
   destination_bar       — bar alone is a reason to go
+  mocktail_program      — dedicated, curated zero-proof or mocktail menu; not just "we can skip
+                          the alcohol" — the non-alcoholic drinks are a real program with intention
+                          and craft (think: a separate NA menu, house-made shrubs, zero-proof pairings)
 
 FOOD
   sharing_plates        — designed for sharing, small plates or family style
