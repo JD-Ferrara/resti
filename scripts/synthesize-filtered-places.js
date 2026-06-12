@@ -214,18 +214,20 @@ Never describe views, a floor experience, or a physical feature that doesn't mat
 the address's actual location.
 
 ━━━ 0b. PARENT CONCEPT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-When sibling_venues data is provided, identify which venue is the primary concept
-and which are sub-concepts or companion spaces.
+When sibling_venues data is provided, use your judgment to determine whether any
+of those venues are sub-concepts or companion spaces of this one, or vice versa.
 
-Examples:
-  Greywind (restaurant) + Spygold (cocktail bar below) → Spygold's parent_concept = Greywind's google_places_id
-  Peak (101st floor dining) + Quin Bar (5th floor bar) → they are unrelated; no parent_concept
+A "sibling" relationship exists when venues are meaningfully connected — they share
+ownership, branding, a physical space, or serve as clear complements to each other
+(e.g. a cocktail bar that functions as the pre-drink or feeder space for an upstairs
+dining room, a café that lives within a larger restaurant, a lounge attached to a
+destination dining experience). The relationship doesn't have to be explicit — use
+reasoning about what makes most sense given the names, floor levels, and venue types.
 
-Rules:
-• The "parent" is typically the primary dining room or the venue the brand is known by.
-• A cocktail bar, lounge, or café that is a sub-space of a restaurant is the "sibling."
-• Completely separate businesses that happen to share a building are NOT siblings.
-• Set parent_concept only on the sibling, not the parent (the parent leaves it null/omitted).
+Set parent_concept to the google_places_id of whichever venue is the primary concept.
+The primary is typically the dining room, the more well-known brand, or the main draw.
+The sibling is typically the bar, lounge, café, or companion space.
+Only set parent_concept on the sibling — the parent leaves it null.
 
 ━━━ 3. NOTES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Voice: conversational, insider, direct. NOT marketing copy.
